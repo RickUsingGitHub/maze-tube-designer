@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# PyInstaller (rebuild with build_exe.bat)
+build/
+dist/
+*.spec
+
+# Exports
+*.stl
+*.zip
+
+# OS / editors
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
