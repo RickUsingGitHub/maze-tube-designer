@@ -12,11 +12,13 @@ watertight STL files that are already oriented for printing.
 
 ![Maze Tube Designer main window](docs/images/main_window.png)
 
-| Solution animation (X-ray cap) | Home detent: the nub clicks into a pocket when closed |
+| Solution animation (X-ray cap) | Click shut: a nub snaps into a pocket when closed |
 |---|---|
 | ![Solution animation](docs/images/solution_animation.png) | ![Home detent](docs/images/home_detent.png) |
 | **Spiral vase mode: one continuous 0.6 mm wall** | **Printable maze map with the solution** |
 | ![Vase mode section](docs/images/vase_section.png) | ![Maze map](docs/images/maze_map.png) |
+| **Text: a poem spiralling round the cap** | **Gift tag: the solution folds inside** |
+| ![Poem on the cap](docs/images/text_poem.png) | ![Gift tag](docs/images/gift_tag.png) |
 
 ## Features
 
@@ -24,13 +26,22 @@ watertight STL files that are already oriented for printing.
   the seed, add a sideways bias and add extra loops, and home and exit can be placed for the longest
   solution.
 * Use 1–6 nubs; the maze repeats once per nub, so all the nubs move together.
-* A **home notch** and a snap **home detent** hold the cap shut at the closed position.
+* A **home notch** and a gentle **click** hold the cap shut at the closed position.
 * **45° ceilings** let both parts print without supports.
 * **Spiral vase mode** prints each part as one continuous wall.
+* **Sized from the contents**: presets for bottles, cans, cash and more, kept within your printer's
+  height. **Simple** and **Detailed** modes.
+* **Text** on the cap and the base, raised or engraved. Several lines are fine, and long text
+  spirals round the tube, so a whole poem fits.
+* **Three-piece tubes** (body, extension, cap) for contents too long for two printable parts.
+* **Printer checks**: every piece is kept within the printer's height, and the tube is checked
+  against the bed.
 * **Long tubes**: set the body and cap lengths separately, so only part of the length is maze.
 * Live 3D view (print layout, assembled, exploded, X-ray, section), solution animation, and an
   unrolled maze map that exports to PNG or SVG.
 * An automatic **fit check** moves the nubs along the whole solution and confirms they clear the body.
+* Exports: one **STL** per piece, a **3MF** with every piece as a separate object on one plate, the
+  maze map, and a printable **gift tag** that hides the solution inside a fold.
 * Designs save as `.mazetube` files (JSON with every parameter plus the exact maze).
 
 ## Download and run
@@ -50,23 +61,50 @@ watertight STL files that are already oriented for printing.
 
 ## Using it
 
-Change any value in the left panel and the design rebuilds immediately.
+The app starts in **Simple** mode. Say what goes inside and what your printer can do, and the tube is
+worked out for you:
 
-| Group | Key parameters |
+1. **Contents**: pick a preset from *Choose what goes inside…*, or type the diameter and length.
+2. **Printer**: set the tallest part your printer can make, the bed size, the fit clearance, and
+   whether you want spiral vase mode. These printer settings are remembered for next time.
+3. **Text**: optional words for the cap and the base.
+4. **Maze**: choose the number of nubs (3 by default) and the longest maze section you want.
+
+The app sets the tube's diameter and the body, cap and maze lengths. Short contents sit entirely in the
+body and the cap just covers the maze. Contents longer than one printable part are shared between body
+and cap, and the maze overlap is shortened automatically so both parts fit the printer height.
+
+Presets cover small gifts, cash (rolled or flat stacks in AUD, USD, EUR, GBP, NZD, CAD, JPY), drink cans
+(250–500 ml), wine, champagne, beer and spirit bottles, rolled paper, and golf and tennis balls. The
+sizes are typical; bottles in particular vary, so measure yours if the fit matters.
+
+Switch to **Detailed** for every setting. Turning off *Size from contents* there lets you set the maze
+diameter and the body and cap lengths yourself. The tube stays exactly as it was when you switch.
+
+| Group | Key parameters (Detailed mode) |
 |---|---|
-| Maze | rows (or Auto = fill a **maze length**), columns (Auto fits the circumference), number of nubs (the maze repeats once per nub), path/wall width, algorithm, seed, sideways bias, extra loops, home notch, home detent |
+| Contents | size from contents on/off, diameter, length, fit slack |
+| Printer | printer height, bed width and depth, **clearance** (0.25–0.35 mm suits most FDM printers), spiral vase mode, line width |
+| Text | cap text, base text, letter height, depth, raised or engraved |
+| Maze | rows (or Auto = fill a **maze length**), columns (Auto fits the circumference), number of nubs (the maze repeats once per nub), path/wall width, algorithm, seed, sideways bias, extra loops, home notch, click shut |
 | Body | maze diameter, groove depth, core wall, **body length**, grip band, plain wall, bottom thickness |
-| Cap | wall, top thickness, **clearance** (0.25–0.35 mm suits most FDM printers), **cap length** |
+| Cap | wall, top thickness, **cap length**, pieces (automatic / two / three), joint length |
 | Print & finish | 45° ceilings (prints with no supports), edge chamfer, grip flutes, facet size |
 
 * **View:** Print layout / Assembled / Exploded / Body only / Cap only, with *X-ray cap* and *Section*.
   Left-drag rotates, right-drag (or Shift+drag) pans, the wheel zooms, and double-click or F refits the view.
 * **Play solution (F5):** animates the cap through the maze and tracks the nubs on the map.
 * **Maze map:** the unrolled maze as seen from outside, with HOME, EXIT and the solution.
-  *Export maze map* saves it as PNG or SVG, e.g. as a printed solution card.
+  The map is cut where the solution doesn't cross, so the route never runs off one edge and back in at
+  the other. A route that winds more than once round the tube gets a wider map (the maze repeats past
+  360°). *Export maze map* saves it as PNG or SVG, e.g. as a printed solution card.
 * **Save / Open:** `.mazetube` files (JSON) store every parameter plus the exact maze.
-* **Export STLs (Ctrl+E):** writes `name_body.stl` and `name_cap.stl`. The menu next to it also exports
-  each part on its own, or a single print-plate STL with both parts.
+* **Export STLs (Ctrl+E):** writes one STL per piece (`name_body.stl`, `name_cap.stl`, plus
+  `name_extension.stl` for three-piece tubes). The menu next to it also exports a single piece, a
+  print-plate STL, or a **3MF** (Ctrl+Shift+E) with every piece as its own object, laid out on your bed.
+* **Export gift tag (Ctrl+G):** a PDF (or PNG) card to print on one sheet. Fold the top half back, then
+  fold in half: the covers end up outside and the solution map inside, out of sight. The front has room
+  for To and From, and uses the cap text as the greeting.
 
 The panel on the right lists the dimensions, the solution length and any warnings. It also shows an
 automatic **fit check**: the app moves the cap's nubs along the whole solution path and confirms they
@@ -82,10 +120,62 @@ never touch the body.
 * If the fit is too tight, raise the clearance by 0.05 mm and print again. Test with a small, low design first.
 * The **home notch** lets the cap close flush only at the home position, so a finished puzzle always
   starts from the beginning.
-* The **home detent** adds a small ramped ridge across the home notch. Closing the cap makes the nub
-  click over it into a pocket, which holds the cap shut until you pull it back over. The value is the
-  interference the cap wall has to flex past: 0.2–0.35 mm suits 2 nubs, 0.15–0.25 mm suits 3+ nubs,
-  and 0 turns it off. The notch is deepened automatically so the nub clears the ridge on both sides.
+* **Click shut** holds the cap at the fully closed position: one nub snaps over a small ramped ridge
+  in its home notch and drops into a pocket.
+  * Choose **Off, Light, Medium or Firm**. Light aims for about 6 N (0.6 kg) of pull to open, Medium
+    12 N and Firm 20 N. These are estimates from the cap's size and wall thickness, so start with Light.
+  * Opening always takes less force than closing, because pulling a smooth cap is harder than pushing it.
+  * There is one ridge, not one per nub. The cap shifts sideways by the fit clearance and its rim flexes
+    into a slight oval to pass it. That keeps the click the same for any number of nubs. (A ridge under
+    every nub locks the rim solid: an earlier version did this and could not be opened by hand.)
+  * On wide tubes and in spiral vase mode the cap is too flexible for a firm click, and the panel says
+    how firm it will be. Detailed mode has **Click flex** to set the ridge by hand.
+  * The notch is deepened automatically so the nub clears the ridge on both sides.
+
+## Text on the cap and base
+
+Type into **On the cap** and **On the base**. Press Enter for a new line. The text reads upright when the
+tube stands on its base, and the letters keep the height you set.
+
+* **Lines that fit round the tube** are stacked and centred, each one level.
+* **Anything longer spirals.** The whole text runs round and round the tube in one continuous line,
+  dropping one line per turn. Each new line starts back at the same position on the next turn, and a
+  blank line leaves a turn empty. A whole poem fits this way.
+* **The part grows to hold the text.** Cap text makes the cap longer; base text makes the grip band
+  below the maze taller. The maze keeps its rows.
+* Letters are only made smaller when the printer height can't hold the text at full size, and the
+  panel says so when that happens.
+* Letters are raised 0.6 mm by default. Detailed mode has the depth and an **Engraved** option that
+  cuts them into the wall instead.
+* In spiral vase mode the letters get 45° edges, and cap text is always raised (cutting in would use
+  up the fit clearance).
+* A long poem makes a detailed mesh (several hundred thousand triangles), so the design takes a
+  second or so to rebuild after you stop typing.
+
+## Three-piece tubes (body, extension, cap)
+
+![Three-piece tube laid out for printing](docs/images/three_pieces.png)
+
+When the contents are too long for two parts on your printer, the cap is made in two pieces that glue
+together: the **extension**, an open tube with the nubs that runs in the maze, and the **cap** end.
+
+* **Pieces → Automatic** (the default) uses three pieces only when two would leave fewer than four maze
+  rows. A wine bottle on a 160 mm printer becomes three 137 mm pieces with the full maze, where two
+  pieces would leave a single row.
+* The joint is a 10 mm overlap: a spigot on the cap end fits a socket in the extension with a glue gap.
+  The socket is tapered inside so the extension prints joint-down without supports. Thin superglue
+  works well.
+* In spiral vase mode the cap end has a flared collar that slips over the extension. Slice the
+  extension with 0 bottom layers, because it is an open tube.
+* With explicit sizes, a cap taller than the printer height is split the same way.
+
+## Printer bed
+
+Set the bed width and depth with the printer height. The grid under the parts in the 3D view is the
+bed at its real size (10 mm squares). The panel on the right shows whether the tube's
+diameter fits the bed and warns when it doesn't (a magnum-sized tube on a small printer, say). The plate
+STL and the 3MF arrange the pieces in rows to suit the bed, and the panel tells you when they won't all
+fit at once.
 
 ## Long tubes (only part of the length is maze)
 
@@ -136,6 +226,10 @@ mazetube/viewer.py    OpenGL 3D viewer (PySide6 + PyOpenGL)
 mazetube/mazeview.py  2D maze map
 mazetube/app.py       main window
 mazetube/params.py    design parameters + .mazetube save/load
+mazetube/presets.py   contents presets (bottles, cans, cash, ...)
+mazetube/textmask.py  text rendering and wrapping round the tube wall
+mazetube/threemf.py   3MF writer
+mazetube/gifttag.py   printable gift tag with the hidden solution
 tests/                geometry self-tests:  python -m tests.test_geometry
 examples/             ready-made designs (e.g. a 25 cm long tube, normal and spiral vase)
 ```

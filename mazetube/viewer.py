@@ -140,7 +140,8 @@ class Viewer3D(QOpenGLWidget):
         self.prog = None
         self.grid_vbo = None
         self.grid_count = 0
-        self.grid_extent = 0
+        self.bed = (256.0, 256.0)     # printer bed drawn under the parts (mm)
+        self._grid_bed = None         # bed size the grid buffer was built for
         self.yaw = -60.0
         self.pitch = 22.0
         self.dist = 200.0
@@ -220,6 +221,7 @@ class Viewer3D(QOpenGLWidget):
             m.vbo = None
         self._stale_vbos.clear()
         self.grid_vbo = None
+        self._grid_bed = None
         try:
             self.prog = self._build_program()
             self._quad_vbo = gl.glGenBuffers(1)
@@ -264,23 +266,38 @@ class Viewer3D(QOpenGLWidget):
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, m.vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, m.data.nbytes, m.data, gl.GL_STATIC_DRAW)
 
+    def set_bed(self, width: float, depth: float):
+        """Size of the printer bed shown under the parts."""
+        bed = (float(width), float(depth))
+        if bed != self.bed:
+            self.bed = bed
+            self.update()
+
     def _ensure_grid(self):
-        lo, hi = self.scene_bounds()
-        ext = float(max(abs(lo[0]), abs(hi[0]), abs(lo[1]), abs(hi[1]), 40.0))
-        ext = math.ceil(ext * 1.6 / 10.0) * 10.0
-        if self.grid_vbo is not None and ext == self.grid_extent:
+        """The printer bed: a 10 mm grid of its real size, with an outline.
+
+        It depends only on the bed size - never on the parts - so it stays
+        put while the cap moves during the solution animation.
+        """
+        if self.grid_vbo is not None and self._grid_bed == self.bed:
             return
         if self.grid_vbo is not None:
             gl.glDeleteBuffers(1, [self.grid_vbo])
+        bx, by = self.bed
+        x0, y0, x1, y1 = -bx / 2.0, -by / 2.0, bx / 2.0, by / 2.0
         lines = []
-        for v in np.arange(-ext, ext + 0.1, 10.0):
-            lines += [(v, -ext, 0), (v, ext, 0), (-ext, v, 0), (ext, v, 0)]
+        for x in x0 + np.arange(0.0, bx + 1e-6, 10.0):
+            lines += [(x, y0, 0), (x, y1, 0)]
+        for y in y0 + np.arange(0.0, by + 1e-6, 10.0):
+            lines += [(x0, y, 0), (x1, y, 0)]
+        self.grid_count = len(lines)
+        lines += [(x0, y0, 0), (x1, y0, 0), (x1, y0, 0), (x1, y1, 0),      # bed outline
+                  (x1, y1, 0), (x0, y1, 0), (x0, y1, 0), (x0, y0, 0)]
         arr = np.array(lines, dtype=np.float32)
         self.grid_vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.grid_vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, arr.nbytes, arr, gl.GL_STATIC_DRAW)
-        self.grid_count = len(arr)
-        self.grid_extent = ext
+        self._grid_bed = self.bed
 
     def _mat(self, name, m):
         gl.glUniformMatrix4fv(self._loc[name], 1, gl.GL_TRUE, m.astype(np.float32))
@@ -335,13 +352,13 @@ class Viewer3D(QOpenGLWidget):
         gl.glDepthFunc(gl.GL_LEQUAL)
         view = self.view_matrix()
         lo, hi = self.scene_bounds()
-        far = self.dist + np.linalg.norm(hi - lo) * 4 + 500
+        far = self.dist + np.linalg.norm(hi - lo) * 4 + 500 + math.hypot(*self.bed)
         proj = _perspective(30.0, w / h, max(self.dist * 0.02, 0.5), far)
         self._mat("u_view", view)
         self._mat("u_proj", proj)
         gl.glUniform4f(L["u_plane"], 0.0, -1.0, 0.0, 0.0)   # cut away the front (y < 0)
 
-        # grid
+        # printer bed: grid, then a brighter outline
         self._ensure_grid()
         self._mat("u_model", eye4)
         gl.glUniform1i(L["u_mode"], 0)
@@ -350,6 +367,8 @@ class Viewer3D(QOpenGLWidget):
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.grid_vbo)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
         gl.glDrawArrays(gl.GL_LINES, 0, self.grid_count)
+        gl.glUniform3f(L["u_color"], 0.50, 0.56, 0.64)
+        gl.glDrawArrays(gl.GL_LINES, self.grid_count, 8)
 
         # meshes
         gl.glUniform1i(L["u_mode"], 1)

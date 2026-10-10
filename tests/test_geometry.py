@@ -42,7 +42,10 @@ def check_design(p: TubeParams, label: str, walls=True):
     bv, bf = d.body_mesh()
     cv, cf = d.cap_mesh()
     t1 = time.perf_counter()
-    for nm, (v, f) in (("body", (bv, bf)), ("cap", (cv, cf))):
+    pieces = [(pt.name, (pt.verts, pt.faces)) for pt in d.parts()]
+    if d.three:
+        pieces.append(("whole cap", (cv, cf)))
+    for nm, (v, f) in pieces:
         ok, msg = edge_check(f)
         assert ok, f"{label} {nm}: {msg}"
         assert mesh_volume(v, f) > 0
@@ -58,14 +61,20 @@ def check_design(p: TubeParams, label: str, walls=True):
     assert gap > 0.9 * min(d.c, EPS_OK), f"{label}: solution path collides (gap {gap:.3f})"
     if d.vase:
         # spiral vase: every layer-to-layer step of the outer wall must be <= 45°
-        for nm, (th, rr, zz) in (("body", d.body_profile), ("cap", d.cap_profile)):
+        for pt in d.parts():
+            th, rr, zz = d.profiles[pt.name]
             dz = np.abs(np.diff(zz))
-            assert dz.min() > 1e-9, f"{label} {nm}: horizontal step in vase profile"
+            assert dz.min() > 1e-9, f"{label} {pt.name}: horizontal step in vase profile"
             slope = np.abs(np.diff(rr, axis=1)) / dz
-            assert slope.max() <= 1.0 + 1e-6, f"{label} {nm}: {slope.max():.3f} steeper than 45°"
-        for nm, (v, f) in zip(("body shell", "cap shell"), d.display_meshes()):
-            ok, msg = edge_check(f)
-            assert ok and mesh_volume(v, f) > 0, f"{label} {nm}: {msg}"
+            assert slope.max() <= 1.0 + 1e-6, f"{label} {pt.name}: {slope.max():.3f} steeper than 45°"
+    for pt in d.display_parts():                       # what the 3D view shows
+        ok, msg = edge_check(pt.faces)
+        assert ok and mesh_volume(pt.verts, pt.faces) > 0, f"{label} {pt.name} (display): {msg}"
+    heights = d.part_heights()
+    for pt in d.parts():                               # print orientation: standing on the bed
+        pv = pt.print_verts()
+        assert abs(pv[:, 2].min()) < 1e-6, f"{label} {pt.name}: not on the bed"
+        assert abs(pv[:, 2].max() - heights[pt.name]) < 1e-6, f"{label} {pt.name}: wrong height"
     if d.detent_h > 0:
         expect = d.detent_h - d.c
         assert 0.8 * expect < snap <= expect + 1e-6, f"{label}: detent overlap {snap:.3f} != {expect:.3f}"
@@ -93,15 +102,29 @@ def check_design(p: TubeParams, label: str, walls=True):
         # cannot rotate out of the home notch
         if d.notch > 0:
             assert d.min_gap(0.5 * d.P_th, 0.0) < 0, "notch does not lock"
+    if p.auto_size:
+        # sized from the contents: they must fit, and both parts must fit the printer
+        bore = 2 * ((d.r_floor - d.w_v) if d.vase else d.r_cav)
+        storage = d.z0 + d.H_ci - p.bottom_thickness
+        assert bore >= p.content_diameter + p.fit_slack - 1e-6, f"{label}: bore too small"
+        assert storage >= p.content_length + p.fit_slack - 1e-6, f"{label}: too short inside"
+        if not d.bands:        # text may lengthen the cap or the grip band on purpose
+            assert storage <= p.content_length + p.fit_slack + d.row_pitch + 12, f"{label}: wasteful"
+        assert max(d.part_heights().values()) <= p.printer_height + 0.05, f"{label}: taller than printer"
+        assert d.z0 >= p.base_height - 1e-6, f"{label}: grip band lost"
     # requested lengths are honoured exactly (or raised to the minimum)
-    if p.body_length > 0:
+    if p.auto_size:
+        pass
+    elif p.body_length > 0:
         assert abs(bv[:, 2].max() - d.H_body) < 1e-6 and d.H_body >= p.body_length - 1e-6
-    if p.cap_length > 0:
+    if not p.auto_size and p.cap_length > 0:
         assert abs(cv[:, 2].max() - d.H_cap) < 1e-6 and d.H_cap >= p.cap_length - 1e-6
-    if p.rows == 0:
+    if not p.auto_size and p.rows == 0:
         assert d.H_body - d.z0 <= p.maze_length + 1e-6, f"{label}: maze longer than requested"
         assert d.H_body - d.z0 + d.row_pitch > p.maze_length, f"{label}: room for another row"
     det = f", detent {snap:.2f} mm" if d.detent_h > 0 else ""
+    if d.three:
+        det += ", 3 pieces"
     print(f"{label:28s} body {len(bf):6d} tris, cap {len(cf):6d} tris, "
           f"min gap {gap:.3f} mm{det}, {blocked} walls verified, {t1 - t0:.2f}s")
     return d
@@ -111,9 +134,12 @@ EPS_OK = 0.3
 
 
 def main():
+    # the summary uses a few non-cp1252 symbols; line buffering keeps progress visible
+    sys.stdout.reconfigure(errors="replace", line_buffering=True)
     check_maze_is_tree()
-    base = TubeParams()
-    d = check_design(base, "default")
+    # explicit-dimension designs (the settings every older design file carries)
+    base = TubeParams(auto_size=False, rows=8, nubs=2, detent=0.3)
+    d = check_design(base, "explicit sizes")
     variants = [
         ("1 nub, no chamfer", dict(nubs=1, chamfer_ceilings=False)),
         ("3 nubs, flutes", dict(nubs=3, grip_flutes=30, maze_diameter=50)),
@@ -123,7 +149,7 @@ def main():
         ("small tight", dict(maze_diameter=24, path_width=3.0, wall_width=1.5,
                              groove_depth=1.2, clearance=0.2, nubs=1, rows=5)),
         ("big 4 nubs", dict(maze_diameter=80, nubs=4, rows=14, grip_flutes=48)),
-        ("detent off", dict(detent=0.0)),
+        ("click off", dict(detent_level=0)),
         ("1 nub detent", dict(nubs=1, detent=0.25)),
         ("detent, notch 0", dict(notch_depth=0.0, detent=0.35)),
         ("detent, no chamfer", dict(chamfer_ceilings=False, detent=0.2)),
@@ -146,6 +172,13 @@ def main():
             setattr(p, k, v)
         check_design(p, label)
 
+    check_auto_sizing()
+    check_three_pieces()
+    check_text()
+    check_bed_and_exports()
+    check_map_window()
+    check_click()
+
     # export smoke test
     tmp = tempfile.mkdtemp()
     v, f = print_plate(d)
@@ -159,6 +192,337 @@ def main():
     print("\n".join(f"  {k}: {val}" for k, val in d.info().items()))
     check_persistence()
     print("ALL TESTS PASSED")
+
+
+def check_auto_sizing():
+    """Contents-driven sizing: defaults, every preset, printer-height limits."""
+    from mazetube.presets import all_presets
+
+    d = check_design(TubeParams(), "default (from contents)")
+    assert d.n == 3 and d.auto and not d.split
+
+    # every preset builds, fits its contents and fits a 250 mm printer
+    count = 0
+    for cat, label, dia, length, _ in all_presets():
+        for vase in (False, True):
+            p = TubeParams(content_diameter=dia, content_length=length, preset=label,
+                           vase_mode=vase, path_width=4.8 if vase else 4.0)
+            d = TubeDesign(p)
+            assert not d.errors, (label, d.errors)
+            (bv, bf), (cv, cf) = d.body_mesh(), d.cap_mesh()
+            assert edge_check(bf)[0] and edge_check(cf)[0], label
+            bore = 2 * ((d.r_floor - d.w_v) if d.vase else d.r_cav)
+            assert bore >= dia + p.fit_slack - 1e-6, label
+            assert d.z0 + d.H_ci - p.bottom_thickness >= length + p.fit_slack - 1e-6, label
+            assert max(d.part_heights().values()) <= 250.05, label
+            assert d.split == (length + p.fit_slack + p.bottom_thickness > 250), label
+            assert not d.three, label                      # nothing here needs three pieces
+            count += 1
+    print(f"presets: {count} designs (normal + vase) fit their contents and a 250 mm printer  OK")
+
+    # full checks (walls, fit, detent) on a few sized designs
+    wine = dict(content_diameter=77, content_length=300)
+    check_design(TubeParams(**wine), "wine bottle, 250 printer")
+    d = check_design(TubeParams(**wine, printer_height=180), "wine bottle, 180 printer")
+    assert d.M < 15 and not d.three and any("shortened" in n for n in d.notes)   # smaller overlap
+    d = check_design(TubeParams(**wine, printer_height=164, pieces=2), "wine, 164 printer, 2 forced")
+    assert d.M <= 2 and not d.three and any("shortened" in n for n in d.notes)
+    check_design(TubeParams(content_diameter=66, content_length=115, nubs=4), "coke can, 4 nubs")
+    check_design(TubeParams(content_diameter=30, content_length=65, vase_mode=True,
+                            path_width=4.8), "cash roll, vase")
+    check_design(TubeParams(content_diameter=10, content_length=5), "tiny contents")
+
+    # too long for the printer: a clear error, not a broken design
+    d = TubeDesign(TubeParams(**wine, printer_height=150, pieces=2))
+    assert d.errors and "too long" in d.errors[0], d.errors
+    d = TubeDesign(TubeParams(**wine, printer_height=100))
+    assert d.errors and "three parts" in d.errors[0], d.errors
+
+    # switching to explicit sizes reproduces the same tube
+    a = TubeDesign(TubeParams(**wine))
+    q = a.p.copy()
+    q.auto_size, q.rows = False, a.M
+    q.body_length, q.cap_length = a.H_body, a.H_cap
+    b = TubeDesign(q, a.maze, a.maze_key())
+    assert np.allclose(a.body_mesh()[0], b.body_mesh()[0]) and np.allclose(a.cap_mesh()[0], b.cap_mesh()[0])
+
+    # design files from before contents-driven sizing keep their explicit dimensions
+    legacy = TubeParams.from_dict({"rows": 8, "nubs": 2, "maze_diameter": 40.0, "body_length": 250.0})
+    assert legacy.auto_size is False and legacy.maze_diameter == 40.0
+    print("auto sizing: printer-height limits, explicit round trip, legacy files  OK")
+
+
+def check_three_pieces():
+    """Body + extension + cap: chosen automatically, joint fits, same assembled tube."""
+    wine = dict(content_diameter=77, content_length=300)
+    d = check_design(TubeParams(**wine, printer_height=160), "wine, 160 printer -> 3 pieces")
+    assert d.three and d.M == 15, "three pieces should keep the full maze"
+    h = d.part_heights()
+    assert abs(h["body"] - h["extension"]) < 0.11 and abs(h["extension"] - h["cap"]) < 1e-6
+    parts = {pt.name: pt for pt in d.parts()}
+    ext, end = parts["extension"], parts["cap"]
+    # the joint: spigot inside socket with a glue gap, and the two never share space
+    assert abs((d.R_sk - d.R_sp) - d.cj) < 1e-9 and d.cj > 0
+    re, ze = np.hypot(ext.verts[:, 0], ext.verts[:, 1]), ext.verts[:, 2]
+    rc, zc = np.hypot(end.verts[:, 0], end.verts[:, 1]), end.verts[:, 2]
+    assert abs(ze.max() - d.z_sh) < 1e-9 and abs(zc.min() - (d.z_sh - d.lap)) < 1e-9
+    assert re[ze > d.z_s + 1e-6].min() >= d.R_sk - 1e-9            # socket wall
+    assert rc[zc < d.z_sh - 1e-6].max() <= d.R_sp + 1e-9           # spigot
+    assert abs(re.min() - d.r_tip) < 1e-9, "the extension carries the nubs"
+    assert rc[rc > 1e-6].min() >= d.r_cap_in - 1e-9, "the cap end has a plain bore"
+    # glued together they are exactly the one-piece cap: same closed length and storage
+    two = TubeDesign(TubeParams(**wine, printer_height=400))
+    assert not two.three
+    assert d.z0 + d.H_ci - d.p.bottom_thickness >= 302 - 1e-6
+
+    check_design(TubeParams(**wine, printer_height=160, vase_mode=True, path_width=5.2),
+                 "3 pieces, spiral vase")
+    d = check_design(TubeParams(**wine, printer_height=120), "wine, 120 printer")
+    assert d.three and d.M < 15
+    d = check_design(TubeParams(auto_size=False, rows=8, body_length=200, cap_length=400),
+                     "explicit 400 cap -> split")
+    assert d.three and max(d.part_heights().values()) <= 250
+    d = check_design(TubeParams(auto_size=False, rows=8, body_length=200, cap_length=400, pieces=2),
+                     "explicit 400 cap, 2 forced")
+    assert not d.three and any("taller than the printer" in w for w in d.warnings)
+    d = check_design(TubeParams(pieces=3), "three pieces forced, small")
+    assert d.three
+    print("three pieces: automatic choice, joint clearance, equal heights  OK")
+
+
+def check_text():
+    """Text on the cap and the base: raised, engraved, in vase mode, on three pieces."""
+    plain = TubeDesign(TubeParams())
+    v_plain = {pt.name: mesh_volume(pt.verts, pt.faces) for pt in plain.parts()}
+
+    d = check_design(TubeParams(cap_text="Happy Birthday", base_text="Rick"), "text raised")
+    assert set(d.bands) == {"cap", "base"}
+    cap = d.parts()[1]
+    r = np.hypot(cap.verts[:, 0], cap.verts[:, 1])
+    assert abs(r.max() - (d.R_out + 0.6)) < 1e-6, "raised text should stand 0.6 mm proud"
+    assert mesh_volume(cap.verts, cap.faces) > v_plain["cap"] + 20, "raised text adds material"
+    assert d.z0 > plain.z0, "the grip band grows to hold the base text"
+    assert d.M == plain.M, "... without costing a maze row"
+
+    d = check_design(TubeParams(cap_text="Happy Birthday", base_text="Rick", text_engrave=True),
+                     "text engraved")
+    cap = d.parts()[1]
+    r = np.hypot(cap.verts[:, 0], cap.verts[:, 1])
+    assert abs(r.max() - d.R_out) < 1e-6 and mesh_volume(cap.verts, cap.faces) < v_plain["cap"] - 20
+
+    d = check_design(TubeParams(cap_text="Happy Birthday", base_text="Rick", vase_mode=True,
+                                path_width=5.2, text_engrave=True), "text, spiral vase")
+    assert d.bands["cap"].depth > 0 > d.bands["base"].depth        # cap forced to raised
+
+    # several short lines: stacked, level, centred - and the letters keep their size
+    d = check_design(TubeParams(cap_text="Happy\nBirthday\nRick"), "three stacked lines")
+    band = d.bands["cap"]
+    assert not band.spiral and len(band.layout.lines) == 3
+    assert abs(band.layout.cap_height - 6.0) < 0.3
+    assert band.height > 3 * band.layout.pitch and band.width < 2 * np.pi * d.R_out
+
+    # a line too long for the tube spirals round and round instead of shrinking
+    d = check_design(TubeParams(cap_text="Congratulations on your retirement, Margaret!"),
+                     "long line spirals")
+    band = d.bands["cap"]
+    assert band.spiral and band.turns > 1 and abs(band.layout.cap_height - 6.0) < 0.3
+    assert not any("reduced" in n for n in d.notes)
+
+    # a whole poem: the cap grows to hold it, every new line starts at the start meridian
+    poem = ("Roses are red, violets are blue,\nthis little tube has a maze just for you.\n"
+            "Twist it and turn it, feel your way through,\n\nHappy Birthday!")
+    plain_cap = plain.H_cap
+    d = check_design(TubeParams(cap_text=poem), "poem spirals, cap grows")
+    band, lay = d.bands["cap"], d.bands["cap"].layout
+    turn = 2 * np.pi * d.R_out
+    assert band.spiral and len(lay.lines) == 5 and abs(lay.cap_height - 6.0) < 0.3
+    assert d.H_cap > plain_cap + 20 and any("lengthened" in n for n in d.notes)
+    assert all(abs(st / turn - round(st / turn)) < 0.01 for st in lay.line_starts)
+    assert lay.line_starts[4] - lay.line_starts[3] > 0.99 * turn, "a blank line leaves a turn empty"
+    # the text really is where the layout says: ink on the start meridian side of each line start
+    z = band.z_lines()
+    for k, st in enumerate(lay.line_starts):
+        if not lay.lines[k]:
+            continue
+        th = band.theta0 + np.linspace(0.5, 12.0, 60) / d.R_out        # first 12 mm of that line
+        row_top = band.z_text - lay.pitch * (st / turn)
+        zz = z[(z < row_top) & (z > row_top - lay.pitch * 1.15)]
+        assert band.sample(th, zz).max() > 0.5, f"line {k} not found at the start meridian"
+    # ... and stays inside its band
+    assert band.sample(band.theta_lines(), np.array([band.z0, band.z1])).max() == 0.0
+
+    d = check_design(TubeParams(base_text=poem), "poem on the base")
+    assert d.bands["base"].spiral and d.z0 > 60 and d.H_body <= 250
+
+    d = check_design(TubeParams(cap_text=poem, vase_mode=True, path_width=5.2), "poem, spiral vase")
+    assert d.bands["cap"].spiral
+
+    # on a tube wide enough, the same poem is just stacked lines
+    d = check_design(TubeParams(cap_text=poem, content_diameter=77, content_length=300),
+                     "poem on a wide tube")
+    assert not d.bands["cap"].spiral
+
+    # only when the printer cannot hold it are the letters made smaller
+    d = check_design(TubeParams(cap_text=poem, printer_height=75), "poem, 75 mm printer")
+    assert d.H_cap <= 75 + 1e-6 and d.bands["cap"].layout.cap_height < 5.5
+    assert any("reduced" in n for n in d.notes)
+
+    d = check_design(TubeParams(content_diameter=77, content_length=300, printer_height=160,
+                                cap_text="Cheers!", base_text="2026"), "text on three pieces")
+    assert d.three and d.bands["cap"].z0 > d.z_sh, "cap text sits on the cap end, above the joint"
+
+    d = TubeDesign(TubeParams(cap_text="   "))
+    assert not d.bands and not d.warnings
+    print("text: raised / engraved / vase / stacked lines / spiral poem / three pieces  OK")
+
+
+def check_bed_and_exports():
+    """Bed check, plate layout, 3MF round trip, gift tag."""
+    from mazetube.threemf import read_3mf, write_3mf
+
+    magnum = dict(content_diameter=105, content_length=350)
+    d = TubeDesign(TubeParams(**magnum, bed_x=100, bed_y=100))
+    assert any("wider than the printer bed" in w for w in d.warnings)
+    d = TubeDesign(TubeParams(**magnum, bed_x=200, bed_y=125))
+    assert not any("wider" in w for w in d.warnings)
+    assert any("don't all fit" in n for n in d.notes) and not d.plate_layout()[1]
+    d = TubeDesign(TubeParams(**magnum))
+    assert d.plate_layout()[1] and not any("bed" in w for w in d.warnings)
+
+    # plate: parts stand on the bed, inside it, without touching each other
+    for kw in (dict(), dict(content_diameter=77, content_length=300, printer_height=160)):
+        d = TubeDesign(TubeParams(**kw))
+        pos, fits = d.plate_layout()
+        assert fits and len(pos) == len(d.parts())
+        for i, (x, y) in enumerate(pos):
+            assert abs(x) + d.R_max <= d.p.bed_x / 2 + 1e-6 and abs(y) + d.R_max <= d.p.bed_y / 2 + 1e-6
+            for x2, y2 in pos[i + 1:]:
+                assert np.hypot(x - x2, y - y2) >= 2 * d.R_max + 7.9
+        v, f = print_plate(d)
+        assert edge_check(f)[0] and abs(v[:, 2].min()) < 1e-6
+
+        # 3MF: every piece a separate, closed object at its place on the bed
+        path = os.path.join(tempfile.mkdtemp(), "plate.3mf")
+        objs = [(pt.name, pt.print_verts(), pt.faces, (x + d.p.bed_x / 2, y + d.p.bed_y / 2, 0.0))
+                for pt, (x, y) in zip(d.parts(), pos)]
+        write_3mf(path, objs, "test")
+        back = read_3mf(path)
+        assert [b[0] for b in back] == [pt.name for pt in d.parts()]
+        for (name, v, f, at), (_, v0, f0, at0) in zip(back, objs):
+            assert edge_check(f)[0] and np.array_equal(f, f0)
+            assert np.abs(v - v0).max() < 1e-4 and np.allclose(at, at0, atol=1e-3)
+            assert 0 <= at[0] - d.R_max and at[0] + d.R_max <= d.p.bed_x
+
+    # gift tag (needs Qt's GUI classes)
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from mazetube.gifttag import save_gift_tag
+    tmp = tempfile.mkdtemp()
+    d = TubeDesign(TubeParams(cap_text="Happy Birthday"))
+    for ext, magic in ((".pdf", b"%PDF"), (".png", b"\x89PNG")):
+        path = os.path.join(tmp, "tag" + ext)
+        save_gift_tag(path, d, "test", "Happy Birthday")
+        data = open(path, "rb").read()
+        assert data[:4] == magic and len(data) > 15000, f"gift tag {ext} looks empty"
+    assert app is not None
+    print("bed check, plate layout, 3MF round trip, gift tag  OK")
+
+
+def check_map_window():
+    """The unrolled map is cut so the solution never runs off the edge of the page."""
+    kinds = {"sector": 0, "turn": 0, "wide": 0}
+    wide_seed = None
+    for seed in range(1, 81):
+        for kw in (dict(), dict(nubs=2), dict(nubs=1), dict(content_diameter=77, content_length=300),
+                   dict(nubs=4, content_diameter=60, algorithm="wilson")):
+            d = TubeDesign(TubeParams(seed=seed, **kw))
+            lo, hi = d.solution_columns()
+            col0, n = d.map_window()
+            span = hi - lo + 1
+            # the highlighted route is always inside the window, with the whole tube shown
+            assert col0 <= lo and hi < col0 + n and n >= d.N, (seed, kw)
+            ths = np.array([d.nub_position(phi, Z)[0] for phi, Z in d.solution_keyframes(lift=0.0)])
+            page = ths - col0 * d.P_th
+            assert page.min() > 0 and page.max() < n * d.P_th, (seed, kw)
+            if span <= d.Ns:
+                # every nub's route stays inside its own sector of the page
+                kinds["sector"] += 1
+                sector = d.Ns * d.P_th
+                assert n == d.N and page.min() // sector == page.max() // sector, (seed, kw)
+            elif span <= d.N:
+                kinds["turn"] += 1
+                assert n == d.N
+            else:
+                kinds["wide"] += 1                          # winds more than once: wider map
+                assert n == span + 2 > d.N
+                wide_seed = wide_seed or (seed, kw)
+    assert all(kinds.values()), kinds
+
+    # drawing: normal and wider-than-a-turn maps render, and the route is really drawn
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from mazetube.mazeview import MazeMapWidget
+    for seed, kw in ((2026, {}), wide_seed):
+        d = TubeDesign(TubeParams(seed=seed, **kw))
+        w = MazeMapWidget()
+        w.dark = False
+        w.set_design(d)
+        img = QImage(900, 420, QImage.Format_RGB32)
+        img.fill(QColor("white"))
+        painter = QPainter(img)
+        w.render_map(painter, QRectF(0, 0, 900, 420))
+        painter.end()
+        blue = sum(1 for x in range(0, 900, 3) for y in range(0, 420, 3)
+                   if QColor(img.pixel(x, y)).blue() > 180 and QColor(img.pixel(x, y)).red() < 60)
+        assert blue > 150, "solution line missing from the map"
+    assert app is not None
+    print(f"maze map window: route always on the page ({kinds['sector']} per-sector, "
+          f"{kinds['turn']} one-turn, {kinds['wide']} wider)  OK")
+
+
+def check_click():
+    """The click at the closed position: one ridge, a pull a hand can manage, easier out than in."""
+    forces = {}
+    for nubs in (1, 2, 3, 4):
+        d = check_design(TubeParams(nubs=nubs), f"click, {nubs} nub(s)")
+        assert d.detent_h > 0 and int(d.ridge_cols.sum()) == 1, "exactly one notch has the ridge"
+        # the ridge really is in one notch only: the other home notches have a plain floor
+        z = np.array([d.z_ridge])
+        for j in range(d.n):
+            r = d.body_radius(np.array([d.nub_angles[j]]), z)[0]
+            assert abs(r - (d.r_floor + (d.detent_h if j == 0 else 0.0))) < 1e-9, (nubs, j)
+        # the cap shifts by the clearance, then flexes: ridge = tip clearance + shift + flex
+        assert abs(d.detent_h - (2 * d.c + d.detent)) < 1e-9
+        assert d.ridge_dn > d.ridge_up, "the way out is the gentler ramp"
+        assert d.open_force < d.close_force
+        forces[nubs] = d.open_force
+    # same click whatever the number of nubs, and one a hand can pull open
+    assert max(forces.values()) - min(forces.values()) < 0.5 and 4 < forces[3] < 9, forces
+
+    prev = 0.0
+    for level in (1, 2, 3):
+        d = TubeDesign(TubeParams(detent_level=level))
+        assert prev < d.open_force <= 25.0, (level, d.open_force)
+        assert d.detent_h <= d.d - 0.3 + 1e-9, "ridge stays inside the groove"
+        prev = d.open_force
+    assert TubeDesign(TubeParams(detent_level=0)).detent_h == 0
+
+    # set by hand, and the limits
+    d = TubeDesign(TubeParams(detent=0.3))
+    assert abs(d.detent - 0.3) < 1e-9
+    assert TubeDesign(TubeParams(detent=1.4)).errors
+    d = TubeDesign(TubeParams(groove_depth=1.0))
+    assert d.detent_h == 0 and any("too shallow" in n for n in d.notes) and not d.errors
+    d = TubeDesign(TubeParams(vase_mode=True, path_width=5.2))
+    assert any("as firm as this cap allows" in n for n in d.notes)
+
+    # designs saved with the old per-nub interference come back at the gentle setting
+    old = TubeParams.from_dict({"nubs": 3, "detent": 0.25, "auto_size": True})
+    assert old.detent_level == 1 and old.detent == 0.0
+    assert TubeParams.from_dict({"detent": 0.0}).detent_level == 0
+    print(f"click: one ridge, about {forces[3]:.0f} N to open at Light for 1-4 nubs  OK")
 
 
 def check_persistence():

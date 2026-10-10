@@ -14,41 +14,101 @@ from PySide6.QtGui import (QAction, QColor, QIcon, QImage, QKeySequence, QPainte
                            QSurfaceFormat)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                                QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
+                               QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea,
                                QSpinBox, QSplitter, QStyle, QTextBrowser, QToolButton,
                                QVBoxLayout, QWidget)
 
 from . import __version__
-from .geometry import TubeDesign, print_plate, transform
+from .geometry import TubeDesign, print_plate
+from .gifttag import save_gift_tag
 from .maze import ALGORITHM_TIPS, ALGORITHMS
 from .mazeview import MazeMapWidget
 from .params import TubeParams, load_design, save_design
+from .presets import PRESETS, slug
 from .stl import write_stl
+from .threemf import write_3mf
 from .viewer import Viewer3D, make_transform
 
 BODY_COLOR = (0.93, 0.56, 0.22)
 CAP_COLOR = (0.24, 0.58, 0.88)
 NUB_COLOR = (0.98, 0.30, 0.38)
+PART_COLORS = {"body": BODY_COLOR, "cap": CAP_COLOR, "extension": (0.20, 0.72, 0.70)}
 
 VIEW_MODES = ["Print layout", "Assembled", "Exploded", "Body only", "Cap only"]
 SPEEDS = {"0.5×": 0.5, "1×": 1.0, "2×": 2.0, "4×": 4.0}
 BASE_SPEED = 22.0   # mm/s along the maze path
 
+# Settings shown in Simple mode; everything else appears only in Detailed mode.
+SIMPLE_KEYS = {"content_diameter", "content_length", "printer_height", "bed_x", "bed_y",
+               "clearance", "vase_mode", "vase_wall", "nubs", "maze_length", "detent_level",
+               "cap_text", "base_text", "text_height"}
+
 # (key, label, kind, min, max, step, suffix/special, tooltip)
 SPEC = [
+    ("Contents", [
+        ("auto_size", "Size from contents", "bool", None, None, None, "",
+         "Work out the tube's diameter and lengths from what goes inside and the printer height.\n"
+         "Turn off to set the maze diameter, body length and cap length yourself."),
+        ("content_diameter", "Diameter", "float", 3.0, 240.0, 1.0, " mm",
+         "Widest part of what goes inside. The bore is made this wide plus the fit slack."),
+        ("content_length", "Length", "float", 3.0, 1900.0, 1.0, " mm",
+         "Length of what goes inside. Short things sit in the body; long things are shared\n"
+         "between body and cap so each part still fits the printer."),
+        ("fit_slack", "Fit slack", "float", 0.0, 20.0, 0.5, " mm",
+         "Spare room added around and above the contents."),
+    ]),
+    ("Printer", [
+        ("printer_height", "Printer height", "float", 30.0, 1000.0, 5.0, " mm",
+         "Tallest part your printer can make (Z height). Parts are kept within it:\n"
+         "for long contents the maze overlap is shortened automatically."),
+        ("bed_x", "Bed width", "float", 30.0, 2000.0, 5.0, " mm",
+         "Width of the printer bed. The tube's diameter is checked against the bed, and the\n"
+         "plate / 3MF export lays the parts out to fit it."),
+        ("bed_y", "Bed depth", "float", 30.0, 2000.0, 5.0, " mm", "Depth of the printer bed."),
+        ("clearance", "Clearance", "float", 0.05, 1.5, 0.05, " mm",
+         "Gap between the parts (radial and around the nubs). 0.25-0.35 mm suits most FDM\n"
+         "printers. Raise it by 0.05 mm if the cap is tight, lower it if it rattles."),
+        ("vase_mode", "Spiral vase mode", "bool", None, None, None, "",
+         "Make both parts printable in spiral vase (spiralize) mode: one continuous wall.\n"
+         "All groove edges and nub faces become 45° slopes, the parts are exported solid\n"
+         "(the slicer hollows them) and the nubs are dents in the cap's wall.\n"
+         "Paths are widened automatically if they are too narrow for the slopes."),
+        ("vase_wall", "Line width", "float", 0.3, 1.5, 0.05, " mm",
+         "The slicer's outer wall line width in vase mode - the printed wall thickness.\n"
+         "Set exactly the same value in the slicer: the cap's fit depends on it.\n"
+         "0.6-0.8 mm with a 0.4 mm nozzle gives sturdy parts."),
+    ]),
+    ("Text", [
+        ("cap_text", "On the cap", "text", None, None, None, "e.g. Happy Birthday\n(or a whole poem)",
+         "Text round the cap. Leave empty for none. Press Enter for a new line.\n"
+         "Lines that fit round the tube are stacked and centred. Anything longer runs round\n"
+         "and round in a spiral, and the cap is made longer to hold it. The letters keep their size."),
+        ("base_text", "On the base", "text", None, None, None, "e.g. a name",
+         "Text round the body's grip band (below the maze). Several lines are fine,\n"
+         "and long text spirals. The grip band is made taller to hold it."),
+        ("text_height", "Letter height", "float", 2.5, 60.0, 0.5, " mm",
+         "Height of the capital letters. It is kept as set: long text spirals rather than\n"
+         "shrinks. (Only if the printer height cannot hold the text are letters made smaller.)"),
+        ("text_depth", "Depth", "float", 0.2, 1.5, 0.1, " mm",
+         "How far the letters stand out from the wall (or are cut into it)."),
+        ("text_engrave", "Engraved", "bool", None, None, None, "",
+         "Cut the letters into the wall instead of raising them.\n"
+         "In spiral vase mode the cap text is always raised."),
+    ]),
     ("Maze", [
+        ("nubs", "Nubs", "int", 1, 6, 1, "",
+         "Number of nubs on the cap. The maze repeats once per nub so all nubs move together.\n"
+         "3 nubs keep the cap centred; fewer nubs give a bigger maze per nub."),
+        ("maze_length", "Maze length", "float", 10.0, 1000.0, 5.0, " mm",
+         "Longest maze section allowed (rows are fitted inside it). A longer maze is harder.\n"
+         "It is shortened automatically when the parts would not fit the printer."),
         ("rows", "Rows", "int", 0, 200, 1, "Auto",
          "Number of maze rows along the tube axis.\n"
-         "Auto = as many rows as fit in the maze length below."),
-        ("maze_length", "Maze length", "float", 10.0, 1000.0, 1.0, " mm",
-         "Length of the maze section when Rows is Auto (rows are fitted inside it).\n"
-         "The rest of a long body is plain tube."),
+         "Auto = as many rows as fit in the maze length."),
         ("columns", "Columns", "int", 0, 240, 1, "Auto",
          "Total columns around the tube. Auto fits as many as path + wall width allow.\n"
          "Always rounded to a multiple of the nub count."),
-        ("nubs", "Nubs", "int", 1, 6, 1, "",
-         "Number of nubs on the cap. The maze repeats once per nub so all nubs move together.\n"
-         "2-3 nubs give a sturdier, wobble-free fit."),
         ("path_width", "Path width", "float", 1.5, 20.0, 0.1, " mm", "Width of the maze grooves."),
         ("wall_width", "Wall width", "float", 0.8, 10.0, 0.1, " mm", "Width of the ridges between grooves."),
         ("algorithm", "Algorithm", "combo", None, None, None, "",
@@ -64,19 +124,25 @@ SPEC = [
         ("notch_depth", "Home notch", "float", 0.0, 6.0, 0.1, " mm",
          "Extra drop at the home position so the cap only closes flush there (0 = off).\n"
          "Deepened automatically when a detent is used."),
-        ("detent", "Home detent", "float", 0.0, 1.0, 0.05, " mm",
-         "Snap ridge in the home notch that the nub clicks over, holding the cap shut.\n"
-         "The value is the interference the cap wall must flex past:\n"
-         "0.2-0.35 mm for 2 nubs, 0.15-0.25 mm for 3+ nubs, 0 = off."),
+        ("detent_level", "Click shut", "choice", [(0, "Off"), (1, "Light"), (2, "Medium"),
+                                                  (3, "Firm")], None, None, "",
+         "A click that holds the cap at the fully closed position: one nub snaps over a small\n"
+         "ridge. Light needs roughly 6 N (0.6 kg) of pull to open, Medium 12 N, Firm 20 N -\n"
+         "estimates, so start with Light. Opening always takes less force than closing."),
+        ("detent", "Click flex", "float", 0.0, 1.5, 0.05, " mm|Automatic",
+         "How far the cap rim has to flex to pass the click ridge. Automatic sizes it from\n"
+         "the setting above and the cap's stiffness. Set a value to tune it by hand."),
     ]),
     ("Body (inner tube)", [
         ("maze_diameter", "Maze diameter", "float", 12.0, 250.0, 0.5, " mm",
-         "Outside diameter of the inner tube, measured over the maze ridges."),
+         "Outside diameter of the inner tube, measured over the maze ridges.\n"
+         "Set automatically while 'Size from contents' is on."),
         ("groove_depth", "Groove depth", "float", 0.6, 6.0, 0.1, " mm", "Depth of the maze grooves (= nub height)."),
         ("core_wall", "Core wall", "float", 0.6, 10.0, 0.1, " mm", "Wall thickness under the groove floor."),
-        ("body_length", "Body length", "float", 0.0, 1000.0, 1.0, " mm|Auto",
+        ("body_length", "Body length", "float", 0.0, 2000.0, 1.0, " mm|Auto",
          "Total length of the body. The maze sits at the top (where the cap goes on),\n"
-         "the rest is plain tube. Auto = grip band + maze only."),
+         "the rest is plain tube. Auto = grip band + maze only.\n"
+         "Set automatically while 'Size from contents' is on."),
         ("base_height", "Grip band", "float", 1.0, 200.0, 0.5, " mm",
          "Minimum plain section below the maze (the part you hold when closed).\n"
          "A longer Body length extends this section."),
@@ -89,11 +155,17 @@ SPEC = [
     ("Cap (outer tube)", [
         ("cap_wall", "Cap wall", "float", 0.8, 10.0, 0.1, " mm", "Wall thickness of the cap."),
         ("cap_top", "Cap top", "float", 0.6, 20.0, 0.1, " mm", "Thickness of the cap's closed end."),
-        ("clearance", "Clearance", "float", 0.05, 1.5, 0.05, " mm",
-         "Gap between the parts (radial and around the nubs). 0.25-0.35 mm suits most FDM printers."),
-        ("cap_length", "Cap length", "float", 0.0, 1000.0, 1.0, " mm|Auto",
+        ("cap_length", "Cap length", "float", 0.0, 2000.0, 1.0, " mm|Auto",
          "Total length of the cap. Auto = just long enough to cover the maze.\n"
-         "A longer cap extends past the body's rim and adds storage space."),
+         "A longer cap extends past the body's rim and adds storage space.\n"
+         "Set automatically while 'Size from contents' is on."),
+        ("pieces", "Pieces", "choice", [(0, "Automatic"), (2, "Two: body + cap"),
+                                        (3, "Three: + extension")], None, None, "",
+         "Three pieces split the cap into an extension (the tube that runs in the maze) and a\n"
+         "cap end, glued together - for contents too long for two printable parts.\n"
+         "Automatic uses three only when two would leave almost no maze."),
+        ("joint_length", "Joint length", "float", 4.0, 40.0, 1.0, " mm",
+         "Overlap of the glued joint between the extension and the cap end."),
     ]),
     ("Print && finish", [
         ("chamfer_ceilings", "45° ceilings", "bool", None, None, None, "",
@@ -105,18 +177,12 @@ SPEC = [
         ("resolution", "Facet size", "float", 0.1, 5.0, 0.1, " mm",
          "Maximum facet length around the circumference (smaller = smoother, bigger files)."),
     ]),
-    ("Spiral vase printing", [
-        ("vase_mode", "Spiral vase mode", "bool", None, None, None, "",
-         "Make both parts printable in spiral vase (spiralize) mode: one continuous wall.\n"
-         "All groove edges and nub faces become 45° slopes, the parts are exported solid\n"
-         "(the slicer hollows them) and the nubs are dents in the cap's wall.\n"
-         "Paths are widened automatically if they are too narrow for the slopes."),
-        ("vase_wall", "Line width", "float", 0.3, 1.5, 0.05, " mm",
-         "The slicer's outer wall line width in vase mode - the printed wall thickness.\n"
-         "Set exactly the same value in the slicer: the cap's fit depends on it.\n"
-         "0.6-0.8 mm with a 0.4 mm nozzle gives sturdy parts."),
-    ]),
 ]
+
+# Rows of the dimensions panel shown in Simple mode
+SIMPLE_INFO = {"Contents", "Layout", "Tallest part", "Printer bed", "Outer diameter", "Home click",
+               "Closed length", "Body length", "Extension length", "Cap length",
+               "Storage inside", "Text", "Solution", "PLA estimate"}
 
 
 def glyph_icon(kind: str) -> QIcon:
@@ -134,6 +200,12 @@ def glyph_icon(kind: str) -> QIcon:
         p.drawLine(QPointF(32, 8), QPointF(32, 40))
         p.drawPolyline([QPointF(19, 28), QPointF(32, 41), QPointF(45, 28)])
         p.drawPolyline([QPointF(10, 40), QPointF(10, 54), QPointF(54, 54), QPointF(54, 40)])
+    elif kind == "tag":
+        p.drawPolygon([QPointF(10, 30), QPointF(26, 14), QPointF(54, 14), QPointF(54, 50),
+                       QPointF(26, 50)])
+        pen.setColor(QColor(240, 163, 86))
+        p.setPen(pen)
+        p.drawEllipse(QPointF(27, 32), 4, 4)
     elif kind == "map":
         p.drawRoundedRect(QRectF(8, 12, 48, 40), 4, 4)
         pen.setColor(QColor(240, 163, 86))
@@ -157,7 +229,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = QSettings("MazeTube", "MazeTubeDesigner")
-        self.params = TubeParams()
+        self.simple_mode = self.settings.value("simple_mode", True, type=bool)
+        self.params = self._fresh_params()
         self.design: TubeDesign | None = None
         self.maze = None
         self.maze_key = None
@@ -166,6 +239,7 @@ class MainWindow(QMainWindow):
         self.anim = None
         self._fitted_bounds = None
         self._dirty = False
+        self._last_fit = (None, 0.0)
         self.widgets = {}
 
         self.regen_timer = QTimer(self)
@@ -193,6 +267,24 @@ class MainWindow(QMainWindow):
         pl.setContentsMargins(8, 8, 8, 8)
         pl.setSpacing(8)
 
+        # Simple / Detailed switch
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(0)
+        self.simple_btn = QPushButton("Simple")
+        self.detail_btn = QPushButton("Detailed")
+        self.simple_btn.setToolTip("Just the essentials: what goes inside, your printer and the maze size.")
+        self.detail_btn.setToolTip("Every setting.")
+        for b in (self.simple_btn, self.detail_btn):
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            b.setMinimumHeight(28)
+            b.setObjectName("modeButton")
+            mode_row.addWidget(b)
+        (self.simple_btn if self.simple_mode else self.detail_btn).setChecked(True)
+        self.simple_btn.clicked.connect(lambda: self.set_simple_mode(True))
+        self.detail_btn.clicked.connect(lambda: self.set_simple_mode(False))
+        pl.addLayout(mode_row)
+
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("Name"))
         self.name_edit = QLineEdit(self.params.name)
@@ -208,6 +300,8 @@ class MainWindow(QMainWindow):
         self.new_maze_btn.setMinimumHeight(30)
         pl.addWidget(self.new_maze_btn)
 
+        self._rows = {}       # key -> (form, field widget)
+        self._groups = []     # (group box, [keys])
         for title, items in SPEC:
             box = QGroupBox(title)
             form = QFormLayout(box)
@@ -215,12 +309,21 @@ class MainWindow(QMainWindow):
             form.setContentsMargins(8, 12, 8, 8)
             form.setHorizontalSpacing(10)
             form.setVerticalSpacing(5)
+            if title == "Contents":
+                self.preset_btn = QPushButton()
+                self.preset_btn.setMinimumHeight(28)
+                self.preset_btn.setToolTip("Pick a standard size for what the tube should hold.\n"
+                                           "Sizes are typical - measure yours if the fit matters.")
+                self.preset_btn.setMenu(self._build_preset_menu())
+                form.addRow(self.preset_btn)
             for key, label, kind, lo, hi, step, extra, tip in items:
                 w = self._make_widget(key, kind, lo, hi, step, extra)
                 lab = QLabel(label)
                 lab.setToolTip(tip)
                 w.setToolTip(tip)
                 form.addRow(lab, w)
+                self._rows[key] = (form, w)
+            self._groups.append((box, [it[0] for it in items]))
             pl.addWidget(box)
         pl.addStretch(1)
 
@@ -341,6 +444,20 @@ class MainWindow(QMainWindow):
             w.setMinimumContentsLength(12)
             w.setCurrentIndex(max(0, w.findData(val)))
             w.currentIndexChanged.connect(lambda i, k=key, ww=w: self._on_param(k, ww.itemData(i)))
+        elif kind == "text":
+            w = QPlainTextEdit(str(val))
+            w.setPlaceholderText(extra)
+            w.setTabChangesFocus(True)
+            w.setFixedHeight(62)                  # about three lines; scrolls for a poem
+            w.textChanged.connect(lambda k=key, ww=w: self._on_param(k, ww.toPlainText()))
+        elif kind == "choice":
+            w = QComboBox()
+            for value, label in lo:
+                w.addItem(label, value)
+            w.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            w.setMinimumContentsLength(12)
+            w.setCurrentIndex(max(0, w.findData(val)))
+            w.currentIndexChanged.connect(lambda i, k=key, ww=w: self._on_param(k, ww.itemData(i)))
         elif kind == "seed":
             box = QWidget()
             hl = QHBoxLayout(box)
@@ -375,6 +492,9 @@ class MainWindow(QMainWindow):
                 w.setCurrentIndex(max(0, w.findData(val)))
             elif isinstance(w, QCheckBox):
                 w.setChecked(bool(val))
+            elif isinstance(w, QPlainTextEdit):
+                if w.toPlainText() != str(val):
+                    w.setPlainText(str(val))
             else:
                 w.setValue(val)
             w.blockSignals(False)
@@ -384,11 +504,99 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._sync_enabled()
 
+    def _fresh_params(self) -> TubeParams:
+        """Default design, using the printer settings remembered from last time."""
+        p = TubeParams()
+        for key in ("printer_height", "bed_x", "bed_y", "clearance"):
+            try:
+                v = self.settings.value(f"default_{key}")
+                if v is not None:
+                    setattr(p, key, float(v))
+            except (TypeError, ValueError):
+                pass
+        return p
+
+    def _build_preset_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for category, items in PRESETS:
+            sub = menu.addMenu(category)
+            for item in items:
+                label, dia, length = item[0], float(item[1]), float(item[2])
+                act = sub.addAction(f"{label}    Ø{dia:g} × {length:g} mm")
+                if len(item) > 3:
+                    act.setToolTip(item[3])
+                act.triggered.connect(
+                    lambda _=False, a=label, b=dia, c=length: self.apply_preset(a, b, c))
+            sub.setToolTipsVisible(True)
+        menu.addSeparator()
+        note = menu.addAction("Sizes are typical – measure yours if the fit matters")
+        note.setEnabled(False)
+        return menu
+
+    def apply_preset(self, label: str, dia: float, length: float):
+        p = self.params
+        generic = {"maze_tube", ""} | {slug(it[0]) for _, items in PRESETS for it in items}
+        if p.name in generic:
+            p.name = slug(label)
+        p.content_diameter, p.content_length, p.preset = dia, length, label
+        self._set_auto(True)
+        self._dirty = True
+        self._refresh_widgets()
+        self.regenerate()
+        self.statusBar().showMessage(f"Sized for: {label} (Ø{dia:g} × {length:g} mm)", 8000)
+
+    def _set_auto(self, on: bool):
+        """Switch between sizing from the contents and explicit dimensions."""
+        p = self.params
+        p.auto_size = on
+        if on:
+            p.rows = 0
+        else:
+            d = self.design
+            if d is not None and d.auto and d.maze is not None:
+                # keep exactly the current tube, now as explicit numbers
+                p.rows = d.M
+                p.maze_diameter = round(2 * d.r_maze, 2)
+                p.body_length = round(d.H_body, 1)
+                p.cap_length = round(d.H_cap, 1)
+
+    def set_simple_mode(self, simple: bool, remember: bool = True):
+        self.simple_mode = simple
+        (self.simple_btn if simple else self.detail_btn).setChecked(True)
+        if remember:
+            self.settings.setValue("simple_mode", simple)
+        self._apply_mode()
+        if self.design is not None:
+            self._show_info(self.design, [], self.design.warnings, *self._last_fit)
+
+    def _apply_mode(self):
+        """Show only the essential settings in Simple mode."""
+        p = self.params
+        for key, (form, field) in self._rows.items():
+            show = (not self.simple_mode) or key in SIMPLE_KEYS
+            if key == "vase_wall" and self.simple_mode:
+                show = p.vase_mode
+            form.setRowVisible(field, show)
+        for box, keys in self._groups:
+            box.setVisible((not self.simple_mode) or any(k in SIMPLE_KEYS for k in keys))
+
     def _sync_enabled(self):
         """Grey out settings that don't apply to the current choices."""
         p = self.params
+        self.preset_btn.setText(p.preset if (p.preset and p.auto_size) else "Choose what goes inside…")
+        self._apply_mode()
         rules = {
-            "maze_length": p.rows == 0,
+            "maze_length": p.rows == 0 or p.auto_size,
+            "rows": not p.auto_size,
+            "maze_diameter": not p.auto_size,
+            "body_length": not p.auto_size,
+            "cap_length": not p.auto_size,
+            "fit_slack": p.auto_size,
+            "text_height": bool(p.cap_text.strip() or p.base_text.strip()),
+            "text_depth": bool(p.cap_text.strip() or p.base_text.strip()),
+            "text_engrave": bool(p.cap_text.strip() or p.base_text.strip()),
+            "joint_length": p.pieces != 2,
+            "detent": p.detent_level > 0,
             "plain_wall": not p.vase_mode,
             "cap_wall": not p.vase_mode,
             "core_wall": not p.vase_mode,
@@ -426,13 +634,20 @@ class MainWindow(QMainWindow):
         self.a_save = act("Save", self.save_design, QStyle.SP_DialogSaveButton, "Ctrl+S",
                           "Save the design (parameters + maze)")
         self.a_save_as = act("Save As…", lambda: self.save_design(as_new=True), None, "Ctrl+Shift+S")
-        self.a_exp_both = act("Export STLs…", lambda: self.export_stl("both"), None,
-                              "Ctrl+E", "Export body and cap as two STL files, ready to print")
+        self.a_exp_both = act("Export STLs…", lambda: self.export_stl("all"), None,
+                              "Ctrl+E", "Export every piece as its own STL file, ready to print")
         self.a_exp_both.setIcon(glyph_icon("export"))
+        self.a_exp_3mf = act("Export 3MF (all parts, one plate)…", self.export_3mf, None,
+                             "Ctrl+Shift+E",
+                             "One 3MF file with every piece as a separate object, laid out on the bed")
         self.a_exp_body = act("Export body STL…", lambda: self.export_stl("body"))
+        self.a_exp_ext = act("Export extension STL…", lambda: self.export_stl("extension"))
         self.a_exp_cap = act("Export cap STL…", lambda: self.export_stl("cap"))
         self.a_exp_plate = act("Export print plate STL…", lambda: self.export_stl("plate"),
-                               tip="Both parts side by side in one STL, in print orientation")
+                               tip="All pieces side by side in one STL, in print orientation")
+        self.a_exp_tag = act("Export gift tag…", self.export_gift_tag, None, "Ctrl+G",
+                             "Printable folding card with the solution hidden inside (PDF or PNG)")
+        self.a_exp_tag.setIcon(glyph_icon("tag"))
         self.a_exp_map = act("Export maze map…", self.export_map, None,
                              "Ctrl+M", "Save the unrolled maze (with solution) as PNG or SVG")
         self.a_exp_map.setIcon(glyph_icon("map"))
@@ -451,20 +666,23 @@ class MainWindow(QMainWindow):
         exp_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         exp_btn.setPopupMode(QToolButton.MenuButtonPopup)
         m = QMenu(exp_btn)
-        for a in (self.a_exp_both, self.a_exp_body, self.a_exp_cap, self.a_exp_plate):
-            m.addAction(a)
+        for a in (self.a_exp_both, self.a_exp_3mf, self.a_exp_plate, None,
+                  self.a_exp_body, self.a_exp_ext, self.a_exp_cap):
+            m.addAction(a) if a is not None else m.addSeparator()
         exp_btn.setMenu(m)
         tb.addWidget(exp_btn)
         tb.addAction(self.a_exp_map)
+        tb.addAction(self.a_exp_tag)
 
         mb = self.menuBar()
         fm = mb.addMenu("&File")
         for a in (self.a_new, self.a_open, self.a_save, self.a_save_as):
             fm.addAction(a)
         fm.addSeparator()
-        for a in (self.a_exp_both, self.a_exp_body, self.a_exp_cap, self.a_exp_plate,
-                  self.a_exp_map, self.a_snap):
-            fm.addAction(a)
+        for a in (self.a_exp_both, self.a_exp_3mf, self.a_exp_plate, self.a_exp_body,
+                  self.a_exp_ext, self.a_exp_cap, None, self.a_exp_map, self.a_exp_tag,
+                  self.a_snap):
+            fm.addAction(a) if a is not None else fm.addSeparator()
         fm.addSeparator()
         fm.addAction(self.a_quit)
         mm = mb.addMenu("&Maze")
@@ -484,9 +702,20 @@ class MainWindow(QMainWindow):
     # ============================================================ params
     def _on_param(self, key, value):
         setattr(self.params, key, value)
+        p = self.params
+        if key in ("content_diameter", "content_length"):
+            p.preset = ""                       # a custom size now
+            if not p.auto_size:                 # editing the contents means "size it for me"
+                self._set_auto(True)
+                self._refresh_widgets()
+        elif key == "auto_size":
+            self._set_auto(bool(value))
+            self._refresh_widgets()
+        if key in ("printer_height", "bed_x", "bed_y", "clearance"):
+            self.settings.setValue(f"default_{key}", float(value))
         if key == "vase_mode" and value:
-            p = self.params
-            need = math.ceil((2 * p.groove_depth + 2 * p.clearance + 0.6) * 10 - 1e-6) / 10.0
+            # room for the 45° slopes plus a nub tip of about 1 mm
+            need = math.ceil((2 * p.groove_depth + 2 * p.clearance + 1.0) * 10 - 1e-6) / 10.0
             if p.path_width < need:
                 p.path_width = need
                 self._refresh_widgets()
@@ -496,7 +725,7 @@ class MainWindow(QMainWindow):
         self._sync_enabled()
         self._dirty = True
         self._update_title()
-        self.regen_timer.start()
+        self.regen_timer.start(900 if key in ("cap_text", "base_text") else 220)
 
     def _on_name(self, text):
         self.params.name = text.strip() or "maze_tube"
@@ -526,7 +755,7 @@ class MainWindow(QMainWindow):
                 self._show_info(None, d.errors, d.warnings)
                 self.statusBar().showMessage("Invalid parameters - see the panel on the right")
                 return
-            (bv, bf), (cv, cf) = d.display_meshes()   # vase mode: shown as printed shells
+            dparts = d.display_parts()                # vase mode: shown as printed shells
             fit_gap, snap = d.check_solution_fit(step=0.5)
         except Exception as exc:   # pragma: no cover - safety net for the GUI
             self._show_info(None, [f"Internal error: {exc}"], [])
@@ -537,8 +766,15 @@ class MainWindow(QMainWindow):
         self.design = d
         self.maze = d.maze
         self.maze_key = d.maze_key()
-        self.viewer.set_mesh("body", bv, bf, BODY_COLOR)
-        self.viewer.set_mesh("cap", cv, cf, CAP_COLOR)
+        names = [pt.name for pt in dparts]
+        for old in PART_COLORS:
+            if old not in names:
+                self.viewer.remove_mesh(old)
+        for pt in dparts:
+            self.viewer.set_mesh(pt.name, pt.verts, pt.faces, PART_COLORS[pt.name])
+        self.a_exp_ext.setEnabled(d.three)
+        nub_part = next(pt for pt in dparts if pt.name == ("extension" if d.three else "cap"))
+        cv, cf = nub_part.verts, nub_part.faces      # highlight the nubs on the piece that has them
         r = np.hypot(cv[:, 0], cv[:, 1])
         in_band = ((cv[:, 2] > d.zn0 - 0.2) & (cv[:, 2] < d.zn1 + 0.2)
                    & (r > d.r_tip + d.w_v - 0.01))
@@ -547,11 +783,41 @@ class MainWindow(QMainWindow):
         self.viewer.set_mesh("nubs", cv, nub_f, NUB_COLOR)
         self.viewer.configure("nubs", overlay=True)
         self.map.set_design(d)
+        self.viewer.set_bed(d.p.bed_x, d.p.bed_y)
         self.apply_view_mode(fit=None)
         dt = time.perf_counter() - t0
+        self._last_fit = (fit_gap, snap)
+        self._write_back(d)
         self._show_info(d, [], d.warnings, fit_gap, snap)
         self.statusBar().showMessage(
-            f"Generated in {dt * 1000:.0f} ms — {len(bf) + len(cf):,} triangles", 6000)
+            f"Generated in {dt * 1000:.0f} ms — "
+            f"{sum(len(pt.faces) for pt in dparts):,} triangles", 6000)
+
+    def _write_back(self, d):
+        """Keep both ways of sizing in step, so switching between them changes nothing.
+
+        Sized from contents: the resulting diameter and lengths go into the
+        (greyed-out) explicit fields.  Explicit sizes: the contents fields show
+        what actually fits inside.
+        """
+        p = self.params
+        if d.auto:
+            vals = {"maze_diameter": round(2 * d.r_maze, 2),
+                    "body_length": round(d.H_body, 1), "cap_length": round(d.H_cap, 1)}
+        else:
+            bore = 2 * ((d.r_floor - d.w_v) if d.vase else d.r_cav)
+            storage = d.z0 + d.H_ci - p.bottom_thickness
+            vals = {"content_diameter": max(3.0, math.floor((bore - p.fit_slack) * 10) / 10),
+                    "content_length": max(3.0, math.floor((storage - p.fit_slack) * 10) / 10)}
+            p.preset = ""
+        for key, v in vals.items():
+            setattr(p, key, v)
+            w = self.widgets.get(key)
+            if w is not None:
+                w.blockSignals(True)
+                w.setValue(v)
+                w.blockSignals(False)
+        self._sync_enabled()
 
     def _show_info(self, d, errors, warnings, fit_gap=None, snap=0.0):
         css = ("<style>td{padding:2px 6px;} .k{color:#9aa3ad;} .e{color:#ff6b6b;} "
@@ -564,6 +830,8 @@ class MainWindow(QMainWindow):
         if d is not None:
             html.append("<h3>Dimensions</h3><table>")
             for k, v in d.info().items():
+                if self.simple_mode and k not in SIMPLE_INFO:
+                    continue
                 html.append(f"<tr><td class='k'>{k}</td><td>{v}</td></tr>")
             html.append("</table>")
             if fit_gap is not None:
@@ -573,9 +841,9 @@ class MainWindow(QMainWindow):
                 else:
                     html.append(f"<p class='e'>✘ Fit check failed (gap {fit_gap:.2f} mm).</p>")
                 if d.detent_h > 0:
-                    html.append(f"<p class='ok'>✔ Home detent: the nub snaps over a "
-                                f"{d.detent_h:.2f} mm ridge ({snap:.2f} mm radial push) into "
-                                f"a free pocket at the closed position.</p>")
+                    html.append(f"<p class='ok'>✔ Click shut: one nub snaps over a "
+                                f"{d.detent_h:.2f} mm ridge into a free pocket. Estimated pull "
+                                f"to open: {d.open_force:.0f} N ({d.open_force / 9.81:.1f} kg).</p>")
             for note in d.notes:
                 html.append(f"<p class='k'>ℹ {note}</p>")
         if warnings:
@@ -607,29 +875,35 @@ class MainWindow(QMainWindow):
         mode = self.mode_combo.currentText()
         xray = self.xray_chk.isChecked()
         v = self.viewer
-        dx = d.R_out + 6.0
-        body_m = np.identity(4)
-        cap_m = np.identity(4)
-        body_vis = cap_vis = True
-        alpha = 1.0
-        if mode == "Print layout":
-            body_m = make_transform(offset=(-dx, 0, 0))
-            cap_m = make_transform(flip=True, offset=(dx, 0, d.H_cap))
-        elif mode == "Assembled":
-            phi, Z = self.cap_pose
-            cap_m = make_transform(rot_z=phi, offset=(0, 0, d.z0 + Z))
-            alpha = 0.30 if xray else 1.0
-        elif mode == "Exploded":
-            cap_m = make_transform(offset=(0, 0, d.H_body + 14.0))
-            alpha = 0.30 if xray else 1.0
-        elif mode == "Body only":
-            cap_vis = False
-        elif mode == "Cap only":
-            body_vis = False
-            cap_m = make_transform(flip=True, offset=(0, 0, d.H_cap))
-        v.configure("body", model=body_m, visible=body_vis)
-        v.configure("cap", model=cap_m, visible=cap_vis, alpha=alpha)
-        v.configure("nubs", model=cap_m, visible=cap_vis)
+        parts = d.parts()
+        pos, _ = d.plate_layout()
+        phi, Z = self.cap_pose
+        cap_alpha = 0.30 if (xray and mode in ("Assembled", "Exploded")) else 1.0
+        cap_pieces = [pt.name for pt in parts if pt.frame == "cap"]
+        models = {}
+        for i, pt in enumerate(parts):
+            is_body = pt.frame == "body"
+            vis = True
+            if mode == "Print layout":             # as exported: caps upside down, on the bed
+                x, y = pos[i]
+                m = (make_transform(offset=(x, y, 0)) if is_body
+                     else make_transform(flip=True, offset=(x, y, pt.top)))
+            elif mode == "Assembled":
+                m = np.identity(4) if is_body else make_transform(rot_z=phi, offset=(0, 0, d.z0 + Z))
+            elif mode == "Exploded":
+                lift = d.H_body + 14.0 + (16.0 if (d.three and pt.name == "cap") else 0.0)
+                m = np.identity(4) if is_body else make_transform(offset=(0, 0, lift))
+            elif mode == "Body only":
+                m, vis = np.identity(4), is_body
+            else:                                  # Cap only: the cap pieces as they print
+                vis = not is_body
+                k = cap_pieces.index(pt.name) if not is_body else 0
+                x = (k - (len(cap_pieces) - 1) / 2.0) * (2 * d.R_max + 8.0)
+                m = make_transform(flip=True, offset=(x, 0, pt.top))
+            v.configure(pt.name, model=m, visible=vis, alpha=1.0 if is_body else cap_alpha)
+            models[pt.name] = (m, vis)
+        m, vis = models["extension" if d.three else "cap"]
+        v.configure("nubs", model=m, visible=vis)
         lo, hi = v.scene_bounds()
         if fit is None:   # auto: refit only if the scene size changed noticeably
             if self._fitted_bounds is None:
@@ -701,8 +975,8 @@ class MainWindow(QMainWindow):
         d = self.design
         if d is not None and self.mode_combo.currentText() == "Assembled":
             m = make_transform(rot_z=phi, offset=(0, 0, d.z0 + Z))
-            self.viewer.configure("cap", model=m)
-            self.viewer.configure("nubs", model=m)
+            for name in ("cap", "extension", "nubs"):
+                self.viewer.configure(name, model=m)
 
     # ============================================================ files
     def _last_dir(self):
@@ -718,7 +992,7 @@ class MainWindow(QMainWindow):
     def new_design(self):
         if not self._confirm_discard():
             return
-        self.params = TubeParams()
+        self.params = self._fresh_params()
         self.maze = self.maze_key = None
         self.current_file = None
         self._dirty = False
@@ -778,45 +1052,52 @@ class MainWindow(QMainWindow):
         self._update_title()
         self.statusBar().showMessage(f"Saved {path}", 6000)
 
+    def _export_base(self, d):
+        base = self._safe_name()
+        if d.vase and not base.endswith("_vase"):
+            base += "_vase"       # make it obvious these are solid spiral-vase models
+        return base
+
     def export_stl(self, kind):
+        """kind: "all" (one STL per piece), "plate", or a piece name."""
         d = self.design
         if d is None:
             QMessageBox.warning(self, "Nothing to export", "The current parameters are not valid.")
             return
-        base = self._safe_name()
-        if d.vase and not base.endswith("_vase"):
-            base += "_vase"       # make it obvious these are solid spiral-vase models
-        suffix = {"both": "", "body": "_body", "cap": "_cap", "plate": "_plate"}[kind]
+        parts = {pt.name: pt for pt in d.parts()}
+        if kind not in ("all", "plate") and kind not in parts:
+            QMessageBox.information(self, "No such piece",
+                                    "This design has no extension - it is made of two pieces.")
+            return
+        base = self._export_base(d)
+        suffix = "" if kind == "all" else "_" + kind
         default = os.path.join(self._last_dir(), base + suffix + ".stl")
-        title = {"both": "Export STLs (writes _body.stl and _cap.stl)", "body": "Export body STL",
-                 "cap": "Export cap STL", "plate": "Export print plate STL"}[kind]
+        tags = ", ".join(f"_{n}.stl" for n in parts)
+        title = {"all": f"Export STLs (writes {tags})",
+                 "plate": "Export print plate STL"}.get(kind, f"Export {kind} STL")
         path, _ = QFileDialog.getSaveFileName(self, title, default, "STL files (*.stl)")
         if not path:
             return
         if not path.lower().endswith(".stl"):
             path += ".stl"
         root = path[:-4]
-        bv, bf = d.body_mesh()
-        cv, cf = d.cap_mesh()
-        cap_print = transform(cv, flip_x=True, offset=(0, 0, d.H_cap))
         written = []
         try:
-            if kind == "both":
-                for tag in ("_body", "_cap"):
+            if kind == "all":
+                for tag in ("_body", "_cap", "_extension"):
                     if root.endswith(tag):
                         root = root[: -len(tag)]
-                write_stl(root + "_body.stl", bv, bf, base + " body")
-                write_stl(root + "_cap.stl", cap_print, cf, base + " cap")
-                written = [root + "_body.stl", root + "_cap.stl"]
-            elif kind == "body":
-                write_stl(path, bv, bf, base + " body")
-                written = [path]
-            elif kind == "cap":
-                write_stl(path, cap_print, cf, base + " cap")
-                written = [path]
-            else:
+                for name, pt in parts.items():
+                    out = f"{root}_{name}.stl"
+                    write_stl(out, pt.print_verts(), pt.faces, f"{base} {name}")
+                    written.append(out)
+            elif kind == "plate":
                 pv, pf = print_plate(d)
                 write_stl(path, pv, pf, base + " plate")
+                written = [path]
+            else:
+                pt = parts[kind]
+                write_stl(path, pt.print_verts(), pt.faces, f"{base} {kind}")
                 written = [path]
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
@@ -824,6 +1105,61 @@ class MainWindow(QMainWindow):
         self._remember_dir(path)
         names = ", ".join(os.path.basename(w) for w in written)
         self.statusBar().showMessage(f"Exported {names} to {os.path.dirname(path)}", 10000)
+
+    def export_3mf(self):
+        """All pieces as separate objects in one 3MF, laid out on the printer bed."""
+        d = self.design
+        if d is None:
+            QMessageBox.warning(self, "Nothing to export", "The current parameters are not valid.")
+            return
+        base = self._export_base(d)
+        path, _ = QFileDialog.getSaveFileName(self, "Export 3MF (all parts on one plate)",
+                                              os.path.join(self._last_dir(), base + ".3mf"),
+                                              "3MF files (*.3mf)")
+        if not path:
+            return
+        if not path.lower().endswith(".3mf"):
+            path += ".3mf"
+        positions, fits = d.plate_layout()
+        cx, cy = d.p.bed_x / 2.0, d.p.bed_y / 2.0
+        objects = [(f"{base} {pt.name}", pt.print_verts(), pt.faces, (x + cx, y + cy, 0.0))
+                   for pt, (x, y) in zip(d.parts(), positions)]
+        try:
+            write_3mf(path, objects, base)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        self._remember_dir(path)
+        msg = f"Exported {os.path.basename(path)} ({len(objects)} parts) to {os.path.dirname(path)}"
+        if not fits:
+            msg += " — the parts don't all fit the bed at once, so arrange or split them in the slicer"
+        self.statusBar().showMessage(msg, 12000)
+
+    def _greeting(self) -> str:
+        """First line of the cap text, if it is short enough to head the gift tag."""
+        lines = [ln.strip() for ln in self.params.cap_text.splitlines() if ln.strip()]
+        return lines[0] if lines and len(lines[0]) <= 32 else ""
+
+    def export_gift_tag(self):
+        """Printable quarter-fold card with the solution hidden inside."""
+        d = self.design
+        if d is None:
+            return
+        default = os.path.join(self._last_dir(), self._safe_name() + "_gift_tag.pdf")
+        path, _ = QFileDialog.getSaveFileName(self, "Export gift tag", default,
+                                              "PDF document (*.pdf);;PNG image (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith((".pdf", ".png")):
+            path += ".pdf"
+        try:
+            save_gift_tag(path, d, self.params.name, self._greeting())
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        self._remember_dir(path)
+        self.statusBar().showMessage(
+            f"Saved gift tag to {path} — print it, fold the top half back, then fold in half", 12000)
 
     def export_map(self):
         d = self.design
@@ -836,7 +1172,8 @@ class MainWindow(QMainWindow):
             return
         title = f"{self.params.name} — {d.N}×{d.M} maze, {len(d.maze.moves)} moves"
         w = 2400
-        h = int((w - 170) * (d.H_body - d.z0) / (2 * math.pi * d.r_maze)) + 300
+        shown = d.map_window()[1] * d.P_th            # angle the map covers (a turn, or more)
+        h = int((w - 170) * (d.H_body - d.z0) / (shown * d.r_maze)) + 340
         self.map.dark = False
         try:
             if path.lower().endswith(".svg"):
@@ -926,6 +1263,8 @@ def apply_dark_theme(app: QApplication):
         QTextBrowser { border: none; }
         QToolBar { border: none; spacing: 4px; padding: 3px; }
         QSplitter::handle { background: #2b2e34; }
+        QPushButton#modeButton { border: 1px solid #3b4049; padding: 4px 10px; background: #2a2d33; }
+        QPushButton#modeButton:checked { background: #3884d6; color: white; border-color: #3884d6; }
     """)
 
 
@@ -957,6 +1296,20 @@ def main(argv=None):
             win.mode_combo.setCurrentIndex(int(argv[argv.index("--mode") + 1]))
         if "--section" in argv:
             win.section_chk.setChecked(True)
+        if "--opaque" in argv:
+            win.xray_chk.setChecked(False)
+        if "--detailed" in argv or "--simple" in argv:
+            win.set_simple_mode("--simple" in argv, remember=False)
+        if "--export-test" in argv:          # write every export, without dialogs
+            out_dir = argv[argv.index("--export-test") + 1]
+            d = win.design
+            for pt in d.parts():
+                write_stl(os.path.join(out_dir, f"t_{pt.name}.stl"), pt.print_verts(), pt.faces)
+            pos, _ = d.plate_layout()
+            write_3mf(os.path.join(out_dir, "t.3mf"),
+                      [(pt.name, pt.print_verts(), pt.faces, (x, y, 0.0))
+                       for pt, (x, y) in zip(d.parts(), pos)])
+            save_gift_tag(os.path.join(out_dir, "t_tag.pdf"), d, win.params.name, win._greeting())
         if "--pose" in argv:
             frac = float(argv[argv.index("--pose") + 1])
             win.toggle_play()
