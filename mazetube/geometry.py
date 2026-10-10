@@ -565,7 +565,7 @@ class TubeDesign:
         if p.text_height < 2.5:
             self.warnings.append("Letter height is below 2.5 mm - too small to print, text left off.")
             return
-        self._text_grid = min(0.6, max(0.25, p.text_height / 24.0))   # mesh spacing under text
+        self._text_grid = min(0.6, max(0.2, p.text_height / 30.0))    # mesh spacing under text
         for key, text in texts.items():
             layout = layout_text(text, p.text_height, TWO_PI * self.R_out, self._text_grid / 2.0)
             if layout is not None:
@@ -659,8 +659,11 @@ class TubeDesign:
             width = TWO_PI * self.R_out if layout.spiral else layout.block.shape[1] * layout.px
             grid = max(self._text_grid, math.sqrt(width * layout.height / 250000.0))
             z_low = lo + 0.5 * (hi - lo - layout.height)
+            # letter edges are rounded over a width the mesh can follow (and to 45° for
+            # spiral vase printing), which is what keeps curves from looking blocky
+            soft = max((0.46 if self.vase else 0.33) * dep, 0.85 * grid)
             self.bands[key] = layout.make_band(self.R_out, z_low, -dep if engrave else dep,
-                                               grid, centre, start)
+                                               grid, centre, start, soft)
             self.bands[key].layout = layout
 
     # ----------------------------------------------------------------- split
@@ -1342,14 +1345,26 @@ def _sweep(th, r, z, z_start, z_end):
     b = (i2[:, None] * K + k[None, :]).ravel()
     c = (i2[:, None] * K + k[None, :] + 1).ravel()
     d = (i[:, None] * K + k[None, :] + 1).ravel()
-    quads1 = np.stack([a, b, c], 1)
-    quads2 = np.stack([a, c, d], 1)
+    quads1, quads2 = _split_quads(r, a, b, c, d)
     fan_s = np.stack([np.full(T, vs), i2 * K, i * K], 1)
     fan_e = np.stack([np.full(T, ve), i * K + K - 1, i2 * K + K - 1], 1)
     faces = np.concatenate([fan_s, quads1, quads2, fan_e]).astype(np.int64)
     if mesh_volume(verts, faces) < 0:
         faces = faces[:, ::-1].copy()
     return verts, faces
+
+
+def _split_quads(r, a, b, c, d):
+    """Two triangles per grid quad, split along the diagonal with the smaller step.
+
+    On a relief (text, bevels) a fixed diagonal makes slanted edges saw-toothed;
+    joining the two corners that are closest in radius follows the shape instead.
+    """
+    rf = r.ravel()
+    other = np.abs(rf[b] - rf[d]) < np.abs(rf[a] - rf[c]) - 1e-12
+    t1 = np.where(other[:, None], np.stack([a, b, d], 1), np.stack([a, b, c], 1))
+    t2 = np.where(other[:, None], np.stack([b, c, d], 1), np.stack([a, c, d], 1))
+    return t1, t2
 
 
 def mesh_volume(verts, faces) -> float:
@@ -1410,7 +1425,7 @@ def _sweep_loop(th, r, z):
     b = (i2[:, None] * K + k[None, :]).ravel()
     c = (i2[:, None] * K + k2[None, :]).ravel()
     d = (i[:, None] * K + k2[None, :]).ravel()
-    faces = np.concatenate([np.stack([a, b, c], 1), np.stack([a, c, d], 1)]).astype(np.int64)
+    faces = np.concatenate(_split_quads(r, a, b, c, d)).astype(np.int64)
     if mesh_volume(verts, faces) < 0:
         faces = faces[:, ::-1].copy()
     return verts, faces

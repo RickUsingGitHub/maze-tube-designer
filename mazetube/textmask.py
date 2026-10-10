@@ -106,9 +106,16 @@ class TextLayout:
         font = _make_font(cap_height / px / ratio)
         fm = QFontMetricsF(font)
         self.cap_height = fm.capHeight() * px                # what the font really gives
-        self.line_px = int(math.ceil(fm.ascent() + fm.descent()))
-        self.pitch = self.line_px * px * LEADING             # mm from one line to the next
-        strips = [_render_line(ln, font, fm, self.line_px) for ln in lines]
+        ink_px = int(math.ceil(fm.ascent() + fm.descent()))
+        self.line_px = int(math.ceil(ink_px * LEADING))      # one row: the ink plus its leading
+        self.pitch = self.line_px * px                       # mm from one line to the next
+        top = (self.line_px - ink_px) // 2
+        strips = []
+        for ln in lines:
+            ink = _render_line(ln, font, fm, ink_px)
+            row = np.zeros((self.line_px, ink.shape[1]), dtype=np.uint8)
+            row[top:top + ink_px] = ink
+            strips.append(row)
         widths = [s.shape[1] * px for s in strips]
         self.max_line = max(widths) if widths else 0.0
         self.empty = not any(s.any() for s in strips)
@@ -136,14 +143,14 @@ class TextLayout:
         else:
             # lines stacked and centred in one block
             pad = max(3, int(math.ceil(MARGIN / px)))
-            row = int(round(self.pitch / px))
+            row = self.line_px
             w = max((s.shape[1] for s in strips), default=0) + 2 * pad
             h = row * len(strips) + 2 * pad
             block = np.zeros((h, w), dtype=np.float32)
             for i, strip in enumerate(strips):
                 x = (w - strip.shape[1]) // 2
-                y = pad + i * row + (row - self.line_px) // 2
-                block[y:y + self.line_px, x:x + strip.shape[1]] = strip / 255.0
+                y = pad + i * row
+                block[y:y + row, x:x + strip.shape[1]] = strip / 255.0
             self.block = block
             self.turns = 0.0
             self.height = h * px
@@ -155,10 +162,12 @@ class TextLayout:
             return f"{what}, spiral of {self.turns:.1f} turns"
         return what
 
-    def make_band(self, r_ref, z_low, depth, pitch, centre_angle, start_angle):
+    def make_band(self, r_ref, z_low, depth, pitch, centre_angle, start_angle, soft=0.0):
+        """Place the text on a wall.  ``soft`` (mm) rounds the letter edges (see _soften)."""
         if self.spiral:
-            return SpiralBand(self, r_ref, z_low, depth, pitch, start_angle)
-        return TextBand(self.block, self.px, centre_angle, r_ref, z_low, depth, pitch)
+            return SpiralBand(self, r_ref, z_low, depth, pitch, start_angle, soft)
+        return TextBand(_soften(self.block, soft / self.px), self.px, centre_angle, r_ref,
+                        z_low, depth, pitch)
 
 
 def layout_text(text: str, cap_height: float, circumference: float, px: float):
@@ -169,10 +178,44 @@ def layout_text(text: str, cap_height: float, circumference: float, px: float):
     return None if layout.empty else layout
 
 
+def _soften(img, sigma_px):
+    """Round the letter edges: a Gaussian blur of the coverage, as float32 in 0..1.
+
+    A hard on/off edge can only follow the mesh grid, which makes curves and
+    diagonals come out as staircases.  Blurring turns every edge into a smooth
+    ramp a couple of grid cells wide - a rounded bevel - which the mesh can
+    follow at any angle.  The half-height line stays on the true outline.
+    """
+    img = np.asarray(img, dtype=np.float32)
+    if img.dtype != np.float32 or img.max(initial=0.0) > 1.0:
+        img = img.astype(np.float32) / 255.0
+    if sigma_px < 0.3 or img.size == 0:
+        return img
+    k = int(math.ceil(3.0 * sigma_px))
+    offs = np.arange(-k, k + 1)
+    w = np.exp(-0.5 * (offs / sigma_px) ** 2)
+    w = (w / w.sum()).astype(np.float32)
+    for axis in (1, 0):
+        out = np.zeros_like(img)
+        n = img.shape[axis]
+        for off, wt in zip(offs, w):
+            if abs(off) >= n:
+                continue
+            src = [slice(None)] * 2
+            dst = [slice(None)] * 2
+            if off > 0:
+                src[axis], dst[axis] = slice(0, n - off), slice(off, n)
+            elif off < 0:
+                src[axis], dst[axis] = slice(-off, n), slice(0, n + off)
+            out[tuple(dst)] += wt * img[tuple(src)]
+        img = out
+    # a touch of contrast: full height on normal strokes, no faint halo round them
+    return np.clip((img - 0.06) / 0.88, 0.0, 1.0)
+
+
 def _finish(cov, depth, z, limit_slope):
-    """Coverage (0..1) -> radial offset, optionally limited to 45° along z."""
-    # sharpen the anti-aliased edge a little so strokes keep crisp walls
-    out = np.clip((cov - 0.25) / 0.5, 0.0, 1.0) * abs(depth)
+    """Relief (0..1) -> radial offset, optionally limited to 45° along z."""
+    out = np.clip(cov, 0.0, 1.0) * abs(depth)
     if limit_slope and out.shape[1] > 1:
         dz = np.abs(np.diff(z))
         for k in range(1, out.shape[1]):
@@ -244,7 +287,7 @@ class TextBand:
         h, w = self.mask.shape
         U, V = np.broadcast_arrays(u[:, None], v[None, :])
         valid = (U >= 0) & (U <= w - 1) & (V >= 0) & (V <= h - 1)
-        return _finish(_bilinear(self.mask, U, V, valid), self.depth, z, limit_slope)
+        return _finish(_bilinear(self.mask, U, V, valid), self.depth, z, limit_slope)   # mask: relief 0..1
 
 
 class SpiralBand:
@@ -257,8 +300,8 @@ class SpiralBand:
 
     spiral = True
 
-    def __init__(self, layout: TextLayout, r_ref, z_low, depth, pitch, start_angle):
-        self.strip = layout.strip
+    def __init__(self, layout: TextLayout, r_ref, z_low, depth, pitch, start_angle, soft=0.0):
+        self.strip = _soften(layout.strip, soft / layout.px)     # relief 0..1 along the helix
         self.px = layout.px
         self.pitch = pitch                        # mesh grid spacing (mm)
         self.r_ref = r_ref
@@ -292,10 +335,8 @@ class SpiralBand:
         top = self.z_text - self.line_pitch * x / self.turn        # top of turn 0 at this angle
         q = (top[:, None] - z[None, :]) / self.line_pitch          # which turn, and how far down it
         t = np.floor(q)
-        h, w = self.strip.shape
-        lead = (self.line_pitch / self.px - h) / 2.0               # leading above the glyph row
-        v = (q - t) * self.line_pitch / self.px - lead - 0.5
+        h, w = self.strip.shape                                    # one row = one line pitch
+        v = (q - t) * self.line_pitch / self.px - 0.5
         u = (x[:, None] + t * self.turn) / self.px - 0.5
         valid = (t >= 0) & (u >= 0) & (u <= w - 1) & (v >= 0) & (v <= h - 1)
-        cov = _bilinear(self.strip, u, v, valid) / 255.0
-        return _finish(cov, self.depth, z, limit_slope)
+        return _finish(_bilinear(self.strip, u, v, valid), self.depth, z, limit_slope)

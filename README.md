@@ -145,8 +145,8 @@ tube stands on its base, and the letters keep the height you set.
   below the maze taller. The maze keeps its rows.
 * Letters are only made smaller when the printer height can't hold the text at full size, and the
   panel says so when that happens.
-* Letters are raised 0.6 mm by default. Detailed mode has the depth and an **Engraved** option that
-  cuts them into the wall instead.
+* Letters are raised 0.6 mm by default, with rounded edges so curves come out smooth. Detailed mode
+  has the depth and an **Engraved** option that cuts them into the wall instead.
 * In spiral vase mode the letters get 45° edges, and cap text is always raised (cutting in would use
   up the fit clearance).
 * A long poem makes a detailed mesh (several hundred thousand triangles), so the design takes a

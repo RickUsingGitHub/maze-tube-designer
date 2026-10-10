@@ -371,6 +371,18 @@ def check_text():
                                 cap_text="Cheers!", base_text="2026"), "text on three pieces")
     assert d.three and d.bands["cap"].z0 > d.z_sh, "cap text sits on the cap end, above the joint"
 
+    # letter edges are rounded ramps the mesh can follow, not on/off steps (which made
+    # curves and diagonals come out as staircases)
+    for kw in (dict(cap_text="Happy Birthday"), dict(cap_text="Sphinx of black quartz, judge my vow. "
+                                                              "Pack my box with five dozen jugs.")):
+        d = TubeDesign(TubeParams(**kw))
+        band = d.bands["cap"]
+        relief = band.sample(np.sort(band.theta_lines()), band.z_lines())
+        assert abs(relief.max() - 0.6) < 0.02, "letters still reach their full height"
+        for axis in (0, 1):
+            step = np.abs(np.diff(relief, axis=axis)).max()
+            assert step <= 0.5 * 0.6, f"letter edge jumps {step:.2f} mm between mesh points"
+
     d = TubeDesign(TubeParams(cap_text="   "))
     assert not d.bands and not d.warnings
     print("text: raised / engraved / vase / stacked lines / spiral poem / three pieces  OK")

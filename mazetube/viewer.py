@@ -107,16 +107,39 @@ def make_transform(rot_z=0.0, flip=False, offset=(0.0, 0.0, 0.0)):
     return t @ m
 
 
+CREASE_COS = math.cos(math.radians(21.0))        # edges sharper than this are drawn crisp
+CREASE_COS_FINE = math.cos(math.radians(42.0))   # ... but fine relief (lettering) may curve more
+FINE_AREA = 0.15                                 # mm²: triangles smaller than this are "fine"
+
+
 class _Mesh:
     def __init__(self, verts, faces, color):
         tri = verts[faces].astype(np.float32)                     # (m,3,3)
-        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-        ln = np.linalg.norm(n, axis=1, keepdims=True)
+        area_n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])    # length = 2 x area
+        ln = np.linalg.norm(area_n, axis=1, keepdims=True)
+        area = 0.5 * ln[:, 0]
         ln[ln == 0] = 1
-        n = (n / ln).astype(np.float32)
+        n = (area_n / ln).astype(np.float32)
+        # Smooth shading where the surface curves gently (the tube wall, rounded
+        # lettering); flat shading at real edges (maze walls, chamfers).  A vertex
+        # is smooth only if every face round it is close to the averaged normal,
+        # so a sharp edge never bleeds a tilted normal into the faces beside it.
+        nv = len(verts)
+        flat_idx = faces.ravel()
+        vn = np.stack([np.bincount(flat_idx, weights=np.repeat(area_n[:, k], 3), minlength=nv)
+                       for k in range(3)], 1)
+        vl = np.linalg.norm(vn, axis=1, keepdims=True)
+        vl[vl == 0] = 1
+        vn = (vn / vl).astype(np.float32)
+        coarse = np.bincount(flat_idx, weights=np.repeat(area > FINE_AREA, 3), minlength=nv) > 0
+        limit = np.where(coarse, CREASE_COS, CREASE_COS_FINE)
+        corner_vn = vn[faces]                                     # (m,3,3)
+        too_sharp = np.einsum("mij,mj->mi", corner_vn, n) < limit[faces]
+        creased = np.bincount(flat_idx, weights=too_sharp.ravel(), minlength=nv) > 0
+        smooth = ~creased[faces]
         data = np.empty((len(faces), 3, 6), dtype=np.float32)
         data[:, :, :3] = tri
-        data[:, :, 3:] = n[:, None, :]
+        data[:, :, 3:] = np.where(smooth[:, :, None], corner_vn, n[:, None, :])
         self.data = data.reshape(-1, 6)
         self.count = len(self.data)
         self.lo = verts.min(axis=0)
