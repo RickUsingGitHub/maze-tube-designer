@@ -31,8 +31,9 @@ watertight STL files that are already oriented for printing.
 * **Spiral vase mode** prints each part as one continuous wall.
 * **Sized from the contents**: presets for bottles, cans, cash and more, kept within your printer's
   height. **Simple** and **Detailed** modes.
-* **Text** on the cap and the base, raised or engraved. Several lines are fine, and long text
-  spirals round the tube, so a whole poem fits.
+* **Text** on the cap and the base: raised, engraved, or flush in a **second colour** for
+  multi-colour printers. Several lines are fine, and long text spirals round the tube, so a whole
+  poem fits.
 * **Three-piece tubes** (body, extension, cap) for contents too long for two printable parts.
 * **Printer checks**: every piece is kept within the printer's height, and the tube is checked
   against the bed.
@@ -46,8 +47,9 @@ watertight STL files that are already oriented for printing.
 
 ## Download and run
 
-* **Windows app (no Python needed):** download `MazeTubeDesigner-windows.zip` from the
-  [Releases](../../releases) page, unzip it, and run `MazeTubeDesigner.exe`.
+* **Windows app (no Python needed):** download `MazeTubeDesigner.exe` from the
+  [Releases](../../releases) page and run it. It is a single file: nothing to unzip or install.
+  It isn't code-signed, so Windows SmartScreen may ask once; choose **More info → Run anyway**.
 * **From source** (Python 3.10+, any OS with OpenGL):
   ```
   git clone https://github.com/RickUsingGitHub/maze-tube-designer.git
@@ -57,7 +59,8 @@ watertight STL files that are already oriented for printing.
   .venv\Scripts\python main.py
   ```
   On Windows you can also just double-click `run.bat`, which sets everything up on first run.
-* **Build the Windows app yourself:** `build_exe.bat` (uses PyInstaller; output goes to `dist\`).
+* **Build the Windows app yourself:** `build_exe.bat` (uses PyInstaller; the result is
+  `dist\MazeTubeDesigner.exe`).
 
 ## Using it
 
@@ -85,7 +88,7 @@ diameter and the body and cap lengths yourself. The tube stays exactly as it was
 |---|---|
 | Contents | size from contents on/off, diameter, length, fit slack |
 | Printer | printer height, bed width and depth, **clearance** (0.25–0.35 mm suits most FDM printers), spiral vase mode, line width |
-| Text | cap text, base text, letter height, depth, raised or engraved |
+| Text | cap text, base text, letter height, lettering (raised / engraved / second colour), depth |
 | Maze | rows (or Auto = fill a **maze length**), columns (Auto fits the circumference), number of nubs (the maze repeats once per nub), path/wall width, algorithm, seed, sideways bias, extra loops, home notch, click shut |
 | Body | maze diameter, groove depth, core wall, **body length**, grip band, plain wall, bottom thickness |
 | Cap | wall, top thickness, **cap length**, pieces (automatic / two / three), joint length |
@@ -102,6 +105,10 @@ diameter and the body and cap lengths yourself. The tube stays exactly as it was
 * **Export STLs (Ctrl+E):** writes one STL per piece (`name_body.stl`, `name_cap.stl`, plus
   `name_extension.stl` for three-piece tubes). The menu next to it also exports a single piece, a
   print-plate STL, or a **3MF** (Ctrl+Shift+E) with every piece as its own object, laid out on your bed.
+  In Flash Studio, OrcaSlicer and Bambu Studio, load the 3MF with **File → Import** (Ctrl+I); see
+  [Opening the 3MF in your slicer](#opening-the-3mf-in-your-slicer).
+  Second-colour lettering is written as extra `_text.stl` files, and as a second part of each
+  piece in the 3MF.
 * **Export gift tag (Ctrl+G):** a PDF (or PNG) card to print on one sheet. Fold the top half back, then
   fold in half: the covers end up outside and the solution map inside, out of sight. The front has room
   for To and From, and uses the cap text as the greeting.
@@ -124,6 +131,8 @@ never touch the body.
   in its home notch and drops into a pocket.
   * Choose **Off, Light, Medium or Firm**. Light aims for about 6 N (0.6 kg) of pull to open, Medium
     12 N and Firm 20 N. These are estimates from the cap's size and wall thickness, so start with Light.
+  * The estimate assumes **PLA**. PETG and ABS are about a third less stiff, so the same ridge gives
+    a lighter click in them; go one setting firmer if it feels too weak.
   * Opening always takes less force than closing, because pulling a smooth cap is harder than pushing it.
   * There is one ridge, not one per nub. The cap shifts sideways by the fit clearance and its rim flexes
     into a slight oval to pass it. That keeps the click the same for any number of nubs. (A ridge under
@@ -145,12 +154,48 @@ tube stands on its base, and the letters keep the height you set.
   below the maze taller. The maze keeps its rows.
 * Letters are only made smaller when the printer height can't hold the text at full size, and the
   panel says so when that happens.
-* Letters are raised 0.6 mm by default, with rounded edges so curves come out smooth. Detailed mode
-  has the depth and an **Engraved** option that cuts them into the wall instead.
+* Letters are raised 0.6 mm by default, with rounded edges so curves come out smooth. **Lettering**
+  can also be *Engraved* (cut into the wall) or *Second colour, flush* (below). Detailed mode has
+  the depth.
 * In spiral vase mode the letters get 45° edges, and cap text is always raised (cutting in would use
   up the fit clearance).
 * A long poem makes a detailed mesh (several hundred thousand triangles), so the design takes a
   second or so to rebuild after you stop typing.
+
+### Text in a second colour
+
+<img src="docs/images/text_two_colour.png" align="right" width="250" alt="Flush lettering in a second colour">
+
+Set **Lettering** to *Second colour, flush* and the letters stop being bumps or dents: the wall stays
+smooth, and each letter becomes a separate piece that fills a cut-out in it exactly. Give those
+pieces another filament on a multi-colour printer (tool changer, IDEX or a filament-switching unit).
+
+* **3MF (recommended):** each lettered piece opens as one object with two parts, the piece and its
+  “text”. In Flash Studio and OrcaSlicer the text part arrives already set to **filament 2**; add
+  a second filament if you only have one loaded. In other slicers, select the text part in the
+  object list and give it your second filament.
+* **STLs:** every lettered piece gets a second file ending in `_text.stl`. Load the pair together
+  and answer *Yes* when the slicer asks whether to load them as one object with multiple parts.
+  The two files share coordinates, so the letters land in their cut-outs.
+* The letters go 0.8 mm deep (two printed walls), so the tube's colour doesn't show through. *Depth*
+  in Detailed mode can make them deeper; a thin wall limits it.
+* The printer changes filament on every layer the text crosses. Short text on one or two lines
+  prints quickly; a poem spiralling down the cap means a change on most layers.
+* Spiral vase mode prints one continuous wall, so it can't do a second colour: the text is raised
+  there instead.
+
+## Opening the 3MF in your slicer
+
+The 3MF holds the shapes, their names and (for two-colour text) which filament each part uses. It
+holds no printer, filament or process settings, so opening it never changes what you have set up.
+
+* **Flash Studio, OrcaSlicer, Bambu Studio:** use **File → Import → Import 3MF/STL/…** (Ctrl+I), or
+  drop the file onto a plate that already has something on it and choose *Import geometry only*.
+* If you open it **as a project** instead (double-click, File → Open, or a drop onto an empty plate),
+  some versions show a notice such as *“The 3MF file was generated by an old OrcaSlicer version,
+  loading geometry data only.”* Flash Studio 1.7.19 does. The wording is misleading but the notice is
+  harmless: it only means the file has no slicer settings in it. Click OK; the pieces load the same.
+* Other slicers (PrusaSlicer, Cura) open it as ordinary objects.
 
 ## Three-piece tubes (body, extension, cap)
 
@@ -231,7 +276,7 @@ mazetube/textmask.py  text rendering and wrapping round the tube wall
 mazetube/threemf.py   3MF writer
 mazetube/gifttag.py   printable gift tag with the hidden solution
 tests/                geometry self-tests:  python -m tests.test_geometry
-examples/             ready-made designs (e.g. a 25 cm long tube, normal and spiral vase)
+examples/             ready-made designs (e.g. a 25 cm long tube, two-colour text, spiral vase)
 ```
 
 ### How the geometry works
@@ -241,6 +286,11 @@ contains every break line. A step is modelled as two grid lines 0.05 mm apart, s
 plain deformed grid: closed, manifold and free of self-intersections, with no boolean operations.
 The tests check this for many parameter sets. They also check that the cap clears the body along the
 solution and that every closed maze wall really blocks the nub.
+
+Second-colour lettering is the one place a mesh is cut. The grid cells the letter outlines pass
+through are split along the outline (marching squares), the covered side is pushed in to form the
+cut-out, and the letters are built from those same triangles, so they fill the cut-out exactly and
+both meshes stay closed.
 
 ## License
 

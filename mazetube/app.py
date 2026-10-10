@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
                                QVBoxLayout, QWidget)
 
 from . import __version__
-from .geometry import TubeDesign, print_plate
+from .geometry import TubeDesign, print_plate, print_plate_text
 from .gifttag import save_gift_tag
 from .maze import ALGORITHM_TIPS, ALGORITHMS
 from .mazeview import MazeMapWidget
@@ -34,6 +34,7 @@ BODY_COLOR = (0.93, 0.56, 0.22)
 CAP_COLOR = (0.24, 0.58, 0.88)
 NUB_COLOR = (0.98, 0.30, 0.38)
 PART_COLORS = {"body": BODY_COLOR, "cap": CAP_COLOR, "extension": (0.20, 0.72, 0.70)}
+TEXT_COLOR = (0.96, 0.95, 0.90)     # second-colour lettering
 
 VIEW_MODES = ["Print layout", "Assembled", "Exploded", "Body only", "Cap only"]
 SPEEDS = {"0.5×": 0.5, "1×": 1.0, "2×": 2.0, "4×": 4.0}
@@ -42,7 +43,7 @@ BASE_SPEED = 22.0   # mm/s along the maze path
 # Settings shown in Simple mode; everything else appears only in Detailed mode.
 SIMPLE_KEYS = {"content_diameter", "content_length", "printer_height", "bed_x", "bed_y",
                "clearance", "vase_mode", "vase_wall", "nubs", "maze_length", "detent_level",
-               "cap_text", "base_text", "text_height"}
+               "cap_text", "base_text", "text_height", "text_style"}
 
 # (key, label, kind, min, max, step, suffix/special, tooltip)
 SPEC = [
@@ -90,11 +91,16 @@ SPEC = [
         ("text_height", "Letter height", "float", 2.5, 60.0, 0.5, " mm",
          "Height of the capital letters. It is kept as set: long text spirals rather than\n"
          "shrinks. (Only if the printer height cannot hold the text are letters made smaller.)"),
+        ("text_style", "Lettering", "choice", [(0, "Raised"), (1, "Engraved"),
+                                               (2, "Second colour, flush")], None, None, "",
+         "Raised letters stand out from the wall; engraved letters are cut into it.\n"
+         "Second colour: the letters sit flush with the wall as separate pieces, to print in\n"
+         "another filament on a multi-colour printer. Export the 3MF and give the “text”\n"
+         "part of each piece your second filament.\n"
+         "In spiral vase mode the text is raised (or engraved on the base)."),
         ("text_depth", "Depth", "float", 0.2, 1.5, 0.1, " mm",
-         "How far the letters stand out from the wall (or are cut into it)."),
-        ("text_engrave", "Engraved", "bool", None, None, None, "",
-         "Cut the letters into the wall instead of raising them.\n"
-         "In spiral vase mode the cap text is always raised."),
+         "How far the letters stand out from the wall (or are cut into it).\n"
+         "Second-colour letters go at least 0.8 mm deep, so the colour prints solid."),
     ]),
     ("Maze", [
         ("nubs", "Nubs", "int", 1, 6, 1, "",
@@ -128,7 +134,8 @@ SPEC = [
                                                   (3, "Firm")], None, None, "",
          "A click that holds the cap at the fully closed position: one nub snaps over a small\n"
          "ridge. Light needs roughly 6 N (0.6 kg) of pull to open, Medium 12 N, Firm 20 N -\n"
-         "estimates, so start with Light. Opening always takes less force than closing."),
+         "estimates for PLA, so start with Light (PETG and ABS flex more: a lighter click).\n"
+         "Opening always takes less force than closing."),
         ("detent", "Click flex", "float", 0.0, 1.5, 0.05, " mm|Automatic",
          "How far the cap rim has to flex to pass the click ridge. Automatic sizes it from\n"
          "the setting above and the cap's stiffness. Set a value to tune it by hand."),
@@ -183,6 +190,32 @@ SPEC = [
 SIMPLE_INFO = {"Contents", "Layout", "Tallest part", "Printer bed", "Outer diameter", "Home click",
                "Closed length", "Body length", "Extension length", "Cap length",
                "Storage inside", "Text", "Solution", "PLA estimate"}
+
+
+def write_part_stls(root: str, part, title: str) -> list:
+    """Write a piece as root.stl, plus root_text.stl if it has second-colour letters.
+
+    Both are in print orientation and share coordinates, so the letters sit in
+    their cut-outs when the two files are loaded together.
+    """
+    write_stl(root + ".stl", part.print_verts(), part.faces, title)
+    written = [root + ".stl"]
+    if part.inlay is not None:
+        write_stl(root + "_text.stl", part.inlay_print_verts(), part.inlay[1], title + " text")
+        written.append(root + "_text.stl")
+    return written
+
+
+def plate_objects(d, base: str, origin=(0.0, 0.0)):
+    """Every piece for a 3MF, laid out round ``origin``: (objects for write_3mf, all fit the bed)."""
+    positions, fits = d.plate_layout()
+    objects = []
+    for pt, (x, y) in zip(d.parts(), positions):
+        text = ([] if pt.inlay is None
+                else [(f"{base} {pt.name} text", pt.inlay_print_verts(), pt.inlay[1])])
+        objects.append((f"{base} {pt.name}", pt.print_verts(), pt.faces,
+                        (x + origin[0], y + origin[1], 0.0), text))
+    return objects, fits
 
 
 def glyph_icon(kind: str) -> QIcon:
@@ -594,7 +627,7 @@ class MainWindow(QMainWindow):
             "fit_slack": p.auto_size,
             "text_height": bool(p.cap_text.strip() or p.base_text.strip()),
             "text_depth": bool(p.cap_text.strip() or p.base_text.strip()),
-            "text_engrave": bool(p.cap_text.strip() or p.base_text.strip()),
+            "text_style": bool(p.cap_text.strip() or p.base_text.strip()),
             "joint_length": p.pieces != 2,
             "detent": p.detent_level > 0,
             "plain_wall": not p.vase_mode,
@@ -770,8 +803,13 @@ class MainWindow(QMainWindow):
         for old in PART_COLORS:
             if old not in names:
                 self.viewer.remove_mesh(old)
+                self.viewer.remove_mesh(old + "_text")
         for pt in dparts:
             self.viewer.set_mesh(pt.name, pt.verts, pt.faces, PART_COLORS[pt.name])
+            if pt.inlay is not None:               # flush lettering in the second colour
+                self.viewer.set_mesh(pt.name + "_text", *pt.inlay, TEXT_COLOR)
+            else:
+                self.viewer.remove_mesh(pt.name + "_text")
         self.a_exp_ext.setEnabled(d.three)
         nub_part = next(pt for pt in dparts if pt.name == ("extension" if d.three else "cap"))
         cv, cf = nub_part.verts, nub_part.faces      # highlight the nubs on the piece that has them
@@ -865,6 +903,19 @@ class MainWindow(QMainWindow):
                 html.append("<p class='k'><b>Slicer:</b> use at least 3 wall loops, 4–5 top layers, "
                             "3–4 bottom layers and 15–20% infill so the maze ridges, floor and cap "
                             "end print solid.</p>")
+            if d.inlays:
+                html.append(
+                    "<p class='k'><b>Second-colour text:</b> the letters are separate pieces that "
+                    "sit flush in the wall. Export the <b>3MF</b>: each lettered piece opens as one "
+                    "object with two parts, and the “text” part is set to filament 2 "
+                    "(Flash Studio and OrcaSlicer read that; in other slicers, set it "
+                    "yourself). With STLs, load a piece and its “_text” file together as "
+                    "one object with multiple parts.</p>")
+            html.append(
+                "<p class='k'><b>3MF in Flash Studio / OrcaSlicer:</b> use <b>File → Import</b> "
+                "(Ctrl+I). Opening it as a project instead shows “loading geometry data "
+                "only”. That notice is harmless: the file holds the shapes, and your "
+                "printer and filament settings stay as they are.</p>")
         self.info.setHtml("".join(html))
 
     # ============================================================ view
@@ -900,7 +951,8 @@ class MainWindow(QMainWindow):
                 k = cap_pieces.index(pt.name) if not is_body else 0
                 x = (k - (len(cap_pieces) - 1) / 2.0) * (2 * d.R_max + 8.0)
                 m = make_transform(flip=True, offset=(x, 0, pt.top))
-            v.configure(pt.name, model=m, visible=vis, alpha=1.0 if is_body else cap_alpha)
+            for name in (pt.name, pt.name + "_text"):
+                v.configure(name, model=m, visible=vis, alpha=1.0 if is_body else cap_alpha)
             models[pt.name] = (m, vis)
         m, vis = models["extension" if d.three else "cap"]
         v.configure("nubs", model=m, visible=vis)
@@ -975,7 +1027,7 @@ class MainWindow(QMainWindow):
         d = self.design
         if d is not None and self.mode_combo.currentText() == "Assembled":
             m = make_transform(rot_z=phi, offset=(0, 0, d.z0 + Z))
-            for name in ("cap", "extension", "nubs"):
+            for name in ("cap", "cap_text", "extension", "nubs"):
                 self.viewer.configure(name, model=m)
 
     # ============================================================ files
@@ -1073,6 +1125,8 @@ class MainWindow(QMainWindow):
         suffix = "" if kind == "all" else "_" + kind
         default = os.path.join(self._last_dir(), base + suffix + ".stl")
         tags = ", ".join(f"_{n}.stl" for n in parts)
+        if d.inlays:
+            tags += ", and _text.stl for the second-colour letters"
         title = {"all": f"Export STLs (writes {tags})",
                  "plate": "Export print plate STL"}.get(kind, f"Export {kind} STL")
         path, _ = QFileDialog.getSaveFileName(self, title, default, "STL files (*.stl)")
@@ -1088,23 +1142,26 @@ class MainWindow(QMainWindow):
                     if root.endswith(tag):
                         root = root[: -len(tag)]
                 for name, pt in parts.items():
-                    out = f"{root}_{name}.stl"
-                    write_stl(out, pt.print_verts(), pt.faces, f"{base} {name}")
-                    written.append(out)
+                    written += write_part_stls(f"{root}_{name}", pt, f"{base} {name}")
             elif kind == "plate":
                 pv, pf = print_plate(d)
                 write_stl(path, pv, pf, base + " plate")
                 written = [path]
+                text = print_plate_text(d)
+                if text is not None:
+                    write_stl(root + "_text.stl", *text, base + " plate text")
+                    written.append(root + "_text.stl")
             else:
-                pt = parts[kind]
-                write_stl(path, pt.print_verts(), pt.faces, f"{base} {kind}")
-                written = [path]
+                written = write_part_stls(root, parts[kind], f"{base} {kind}")
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
         self._remember_dir(path)
         names = ", ".join(os.path.basename(w) for w in written)
-        self.statusBar().showMessage(f"Exported {names} to {os.path.dirname(path)}", 10000)
+        msg = f"Exported {names} to {os.path.dirname(path)}"
+        if any(w.endswith("_text.stl") for w in written):
+            msg += " — load each piece with its _text file as one object with multiple parts"
+        self.statusBar().showMessage(msg, 12000)
 
     def export_3mf(self):
         """All pieces as separate objects in one 3MF, laid out on the printer bed."""
@@ -1120,17 +1177,17 @@ class MainWindow(QMainWindow):
             return
         if not path.lower().endswith(".3mf"):
             path += ".3mf"
-        positions, fits = d.plate_layout()
-        cx, cy = d.p.bed_x / 2.0, d.p.bed_y / 2.0
-        objects = [(f"{base} {pt.name}", pt.print_verts(), pt.faces, (x + cx, y + cy, 0.0))
-                   for pt, (x, y) in zip(d.parts(), positions)]
+        objects, fits = plate_objects(d, base, (d.p.bed_x / 2.0, d.p.bed_y / 2.0))
         try:
-            write_3mf(path, objects, base)
+            write_3mf(path, objects, base, colors=(CAP_COLOR, TEXT_COLOR))
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
         self._remember_dir(path)
         msg = f"Exported {os.path.basename(path)} ({len(objects)} parts) to {os.path.dirname(path)}"
+        msg += " — in Flash Studio / OrcaSlicer load it with File → Import (Ctrl+I)"
+        if d.inlays:
+            msg += "; the “text” parts are set to filament 2"
         if not fits:
             msg += " — the parts don't all fit the bed at once, so arrange or split them in the slicer"
         self.statusBar().showMessage(msg, 12000)
@@ -1304,11 +1361,9 @@ def main(argv=None):
             out_dir = argv[argv.index("--export-test") + 1]
             d = win.design
             for pt in d.parts():
-                write_stl(os.path.join(out_dir, f"t_{pt.name}.stl"), pt.print_verts(), pt.faces)
-            pos, _ = d.plate_layout()
-            write_3mf(os.path.join(out_dir, "t.3mf"),
-                      [(pt.name, pt.print_verts(), pt.faces, (x, y, 0.0))
-                       for pt, (x, y) in zip(d.parts(), pos)])
+                write_part_stls(os.path.join(out_dir, f"t_{pt.name}"), pt, pt.name)
+            write_3mf(os.path.join(out_dir, "t.3mf"), plate_objects(d, "t")[0],
+                      colors=(CAP_COLOR, TEXT_COLOR))
             save_gift_tag(os.path.join(out_dir, "t_tag.pdf"), d, win.params.name, win._greeting())
         if "--pose" in argv:
             frac = float(argv[argv.index("--pose") + 1])

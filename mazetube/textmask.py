@@ -246,6 +246,7 @@ class TextBand:
     """A block of text (one or more level lines) on a cylinder wall, centred on an angle."""
 
     spiral = False
+    inlay = False                         # True: flush, in a second colour (depth = how deep)
 
     def __init__(self, mask, px, theta_centre, r_ref, z_low, depth, pitch):
         self.mask = mask
@@ -299,6 +300,7 @@ class SpiralBand:
     """
 
     spiral = True
+    inlay = False
 
     def __init__(self, layout: TextLayout, r_ref, z_low, depth, pitch, start_angle, soft=0.0):
         self.strip = _soften(layout.strip, soft / layout.px)     # relief 0..1 along the helix

@@ -36,6 +36,7 @@ PLA_E = 3000.0      # stiffness of printed PLA (MPa), for the click-force estima
 FRICTION = 0.3      # PLA sliding on PLA
 CLICK_FORCE = {1: 6.0, 2: 12.0, 3: 20.0}     # pull to open (N): light, medium, firm
 CLICK_NAME = {1: "light", 2: "medium", 3: "firm"}
+INLAY_DEPTH = 0.8   # second-colour text goes at least this deep: two printed walls (mm)
 TWO_PI = 2.0 * math.pi
 
 
@@ -55,6 +56,7 @@ class TubeDesign:
         self._body = self._cap = self._parts = self._display = None
         self.profiles: dict = {}      # part name -> (theta, radii, heights) of its sweep
         self.bands: dict = {}         # "cap" / "base" -> text band on that wall
+        self.inlays: dict = {}        # "cap" / "base" -> (verts, faces) of second-colour letters
         self._layouts: dict = {}
         self.three = False            # body + extension + cap
         self._want3 = False
@@ -638,6 +640,11 @@ class TubeDesign:
                      self.R_out - self.r_plain),
         }
         depth = min(1.5, max(0.2, p.text_depth))
+        style = int(p.text_style)              # 0 raised, 1 engraved, 2 second colour (flush)
+        if style == 2 and self.vase:
+            style = 0
+            self.notes.append("Second-colour text needs normal printing - in spiral vase mode "
+                              "it is raised instead.")
         centre = math.radians(300.0)           # level text faces the default camera
         start = math.radians(250.0)            # a spiral starts just left of that
         for key in list(self._layouts):
@@ -645,12 +652,19 @@ class TubeDesign:
             layout = self._fit_text(key, hi - lo)
             if layout is None:
                 continue
-            engrave, dep = bool(p.text_engrave), depth
+            engrave, inlay, dep = style == 1, style == 2, depth
             if engrave and self.vase and key == "cap":
                 engrave = False                # cutting in would eat the cap's fit clearance
                 self.notes.append("Cap text is raised in spiral vase mode (engraving would "
                                   "reduce the fit clearance).")
-            if engrave and not self.vase:
+            if inlay:
+                # deep enough for two printed walls, so the tube's colour doesn't show through
+                dep = min(max(dep, INLAY_DEPTH), wall - 0.8)
+                if dep < 0.4:
+                    self.warnings.append(f"The wall is too thin for second-colour {key} text - "
+                                         f"left off.")
+                    continue
+            elif engrave and not self.vase:
                 dep = min(dep, wall - 0.8)
                 if dep < 0.2:
                     self.warnings.append(f"The wall is too thin to engrave the {key} text - left off.")
@@ -662,9 +676,12 @@ class TubeDesign:
             # letter edges are rounded over a width the mesh can follow (and to 45° for
             # spiral vase printing), which is what keeps curves from looking blocky
             soft = max((0.46 if self.vase else 0.33) * dep, 0.85 * grid)
-            self.bands[key] = layout.make_band(self.R_out, z_low, -dep if engrave else dep,
+            if inlay:
+                soft = 0.7 * grid              # flush letters: just enough to place the outline
+            self.bands[key] = layout.make_band(self.R_out, z_low, -dep if (engrave or inlay) else dep,
                                                grid, centre, start, soft)
             self.bands[key].layout = layout
+            self.bands[key].inlay = inlay
 
     # ----------------------------------------------------------------- split
     def _plan_split(self):
@@ -812,12 +829,31 @@ class TubeDesign:
             return np.zeros(0), np.zeros((len(th), 0))
         z = band.z_lines()
         off = band.sample(th, z, limit_slope=self.vase)
+        if band.inlay:
+            off = np.zeros_like(off)           # flush: the letters are cut out after sweeping
         if descending:
             z, off = z[::-1], off[:, ::-1]
         return z, off
 
     def _band_list(self, key):
         return [self.bands[key]] if key in self.bands else []
+
+    def _cut_inlay(self, key, mesh, th, k0, descending=False):
+        """Cut second-colour text out of a swept part.
+
+        ``k0`` is the profile point where the text rows start.  The letters
+        themselves are kept in ``self.inlays[key]``; they fill the cut exactly.
+        """
+        band = self.bands.get(key)
+        if band is None or not band.inlay:
+            return mesh
+        cover = np.abs(band.sample(th, band.z_lines())) / abs(band.depth)
+        if descending:
+            cover = cover[:, ::-1]
+        verts, faces, letters = _inlay_cut(*mesh, len(th), k0, cover, abs(band.depth))
+        if letters is not None:
+            self.inlays[key] = letters
+        return verts, faces
 
     def _nub_lines(self):
         zl = []
@@ -881,6 +917,7 @@ class TubeDesign:
         else:
             col(R, 0.0)
         tz, toff = self._text_rows("base", th)             # text round the grip band
+        k_text = len(cols_r)
         for k, z in enumerate(tz):
             col(R + toff[:, k], z)
         if not self.vase:
@@ -904,7 +941,7 @@ class TubeDesign:
         rr = np.concatenate([rr, np.tile(bore_r, (len(th), 1))], 1)
         zz = np.concatenate([zz, bore_z])
         self.profiles["body"] = (th, rr, zz)
-        return _sweep(th, rr, zz, 0.0, p.bottom_thickness)
+        return self._cut_inlay("base", _sweep(th, rr, zz, 0.0, p.bottom_thickness), th, k_text)
 
     def _cap_columns(self, th):
         cols_r, cols_z = [], []
@@ -949,6 +986,7 @@ class TubeDesign:
             col(R, self.H_cap - ch)
         else:
             col(R, self.H_cap)
+        k_text = len(cols_r)
         if bands:
             tz, toff = self._text_rows("cap", th, descending=True)
             for k, z in enumerate(tz):
@@ -960,7 +998,8 @@ class TubeDesign:
             col(rz[:, k], z)
         rr, zz = np.stack(cols_r, 1), np.array(cols_z)
         self.profiles["cap_whole"] = (th, rr, zz)
-        return _sweep(th, rr, zz, self.H_cap, self.H_ci)
+        mesh = _sweep(th, rr, zz, self.H_cap, self.H_ci)
+        return self._cut_inlay("cap", mesh, th, k_text, descending=True) if bands else mesh
 
     def _make_extension(self):
         """Lower piece of a split cap: an open tube with the nubs at its rim.
@@ -1033,6 +1072,7 @@ class TubeDesign:
             col(R, self.H_cap - ch)
         else:
             col(R, self.H_cap)
+        k_text = len(cols_r)
         tz, toff = self._text_rows("cap", th, descending=True)
         for k, z in enumerate(tz):
             col(R + toff[:, k], z)
@@ -1044,7 +1084,8 @@ class TubeDesign:
         col(self.r_cap_in, self.H_ci)
         rr, zz = np.stack(cols_r, 1), np.array(cols_z)
         self.profiles["cap"] = (th, rr, zz)
-        return _sweep(th, rr, zz, self.H_cap, self.H_ci)
+        return self._cut_inlay("cap", _sweep(th, rr, zz, self.H_cap, self.H_ci), th, k_text,
+                               descending=True)
 
     # ------------------------------------------------------------- parts
     def parts(self):
@@ -1063,6 +1104,8 @@ class TubeDesign:
                                 height=self.H_cap))
                 if "cap_whole" in self.profiles:
                     self.profiles["cap"] = self.profiles["cap_whole"]
+            for part, key in ((out[0], "base"), (out[-1], "cap")):
+                part.inlay = self.inlays.get(key)       # second-colour letters, if any
             self._parts = out
         return self._parts
 
@@ -1293,8 +1336,9 @@ class TubeDesign:
             bits = []
             for key, band in self.bands.items():
                 lay = band.layout
-                bits.append(f"{key}: {lay.describe()}, {lay.cap_height:.1f} mm letters, "
-                            f"{abs(band.depth):.1f} mm {'raised' if band.depth > 0 else 'engraved'}")
+                how = (f"second colour, flush ({abs(band.depth):.1f} mm deep)" if band.inlay
+                       else f"{abs(band.depth):.1f} mm {'raised' if band.depth > 0 else 'engraved'}")
+                bits.append(f"{key}: {lay.describe()}, {lay.cap_height:.1f} mm letters, {how}")
             out["Text"] = "; ".join(bits)
         out.update({
             "Maze grid": f"{self.N} columns × {self.M} rows ({self.Ns} per nub)",
@@ -1304,7 +1348,7 @@ class TubeDesign:
                            if self.notch > 0 else "off"),
             "Home click": (f"{'set by hand' if p.detent >= 0.05 else CLICK_NAME.get(int(p.detent_level), 'on')}"
                            f": about {self.open_force:.0f} N to open, {self.close_force:.0f} N to "
-                           f"close (estimate); the rim flexes {self.detent:.2f} mm"
+                           f"close (estimate for PLA); the rim flexes {self.detent:.2f} mm"
                            if self.detent_h > 0 else "off"),
             "Solution": f"{len(mz.moves)} moves, {mz.turns()} turns",
             "Dead ends": f"{mz.dead_ends()} per sector",
@@ -1402,12 +1446,20 @@ class Part:
     frame: str
     top: float
     height: float
+    inlay: tuple | None = None    # (verts, faces) of flush second-colour lettering, same frame
+
+    def _to_print(self, verts) -> np.ndarray:
+        if self.frame == "body":
+            return verts
+        return transform(verts, flip_x=True, offset=(0, 0, self.top))
 
     def print_verts(self) -> np.ndarray:
         """Vertices in print orientation, standing on z = 0."""
-        if self.frame == "body":
-            return self.verts
-        return transform(self.verts, flip_x=True, offset=(0, 0, self.top))
+        return self._to_print(self.verts)
+
+    def inlay_print_verts(self) -> np.ndarray:
+        """The lettering's vertices in print orientation: in place, inside the part."""
+        return self._to_print(self.inlay[0])
 
 
 def _sweep_loop(th, r, z):
@@ -1459,6 +1511,151 @@ def print_plate(design: "TubeDesign", gap: float = 8.0):
         faces.append(part.faces + n)
         n += len(v)
     return np.concatenate(verts), np.concatenate(faces)
+
+
+def print_plate_text(design: "TubeDesign", gap: float = 8.0):
+    """The second-colour lettering of all parts, placed to match print_plate(); None if none."""
+    positions, _ = design.plate_layout(gap)
+    verts, faces, n = [], [], 0
+    for part, (x, y) in zip(design.parts(), positions):
+        if part.inlay is None:
+            continue
+        v = part.inlay_print_verts() + np.array([x, y, 0.0])
+        verts.append(v)
+        faces.append(part.inlay[1] + n)
+        n += len(v)
+    if not verts:
+        return None
+    return np.concatenate(verts), np.concatenate(faces)
+
+
+# Marching squares over a grid cell with corners a b c d (slots 0-3, in the sweep's
+# winding) and the points where the outline crosses its edges ab bc cd da (slots 4-7).
+# For each case (bit n set = corner n inside the outline): triangles covering the part
+# of the cell inside it.  No triangle edge joins two crossing points except along the
+# outline itself, which is what keeps the cut-out letters a closed 2-manifold.
+_MS_IN = {
+    1: ((0, 4, 7),), 2: ((1, 5, 4),), 4: ((2, 6, 5),), 8: ((3, 7, 6),),
+    3: ((0, 1, 5), (0, 5, 7)), 6: ((1, 2, 6), (1, 6, 4)),
+    12: ((2, 3, 7), (2, 7, 5)), 9: ((3, 0, 4), (3, 4, 6)),
+    14: ((2, 3, 7), (2, 7, 4), (2, 4, 1)), 13: ((3, 0, 4), (3, 4, 5), (3, 5, 2)),
+    11: ((0, 1, 5), (0, 5, 6), (0, 6, 3)), 7: ((1, 2, 6), (1, 6, 7), (1, 7, 0)),
+    5: ((0, 4, 7), (2, 6, 5)), 10: ((1, 5, 4), (3, 7, 6)),
+    15: ((0, 1, 2), (0, 2, 3)),
+}
+# ... and the part outside it: the complement (two opposite corners inside leave a hexagon)
+_MS_OUT = {c: _MS_IN[15 - c] for c in range(1, 15) if c not in (5, 10)}
+_MS_OUT[5] = ((1, 5, 6), (1, 6, 3), (1, 3, 7), (1, 7, 4))
+_MS_OUT[10] = ((0, 4, 5), (0, 5, 2), (0, 2, 6), (0, 6, 7))
+
+
+def _inlay_cut(verts, faces, T, k0, cover, depth):
+    """Cut flush lettering out of a swept wall, for printing in a second colour.
+
+    verts, faces: a mesh from _sweep (vertex i*K + k is profile point k at angle
+    i).  cover: (T, n) coverage 0..1 of the lettering at profile points
+    k0 .. k0+n-1, which lie on an outer wall.  Where it is above 0.5 the wall is
+    cut ``depth`` deep.  The outline is placed by interpolation, so it runs
+    smoothly through the grid cells instead of along them (marching squares).
+
+    Returns (verts, faces, letters): the wall with the letters cut out, and the
+    letters as a closed (verts, faces) mesh that fills the cut exactly - its
+    inner faces are the very triangles of the cut - or None if nothing is covered.
+    """
+    K = (len(verts) - 2) // T
+    n = cover.shape[1]
+    cover = np.array(cover, dtype=float)
+    cover[:, 0] = cover[:, -1] = 0.0                      # the first and last rows stay whole
+    inside = cover > 0.5
+    if not inside.any():
+        return verts, faces, None
+    i2 = (np.arange(T) + 1) % T
+    grid = np.arange(T)[:, None] * K + k0 + np.arange(n)[None, :]      # vertex ids (T, n)
+    P = verts[grid]
+
+    # where the outline crosses grid edges: those round the tube, then those along it
+    def crossings(m0, m1, p0, p1):
+        # coverage is S-shaped across a letter's edge; its logit is close to linear in
+        # distance, so interpolating that puts the outline where it really is
+        l0, l1 = (np.log(m / (1.0 - m)) for m in (np.clip(m0, 0.02, 0.98), np.clip(m1, 0.02, 0.98)))
+        t = np.clip(-l0 / (l1 - l0), 0.08, 0.92)
+        return p0 + t[:, None] * (p1 - p0)
+
+    mix_t = inside != inside[i2]                                        # edge (i,j)-(i+1,j)
+    mix_z = inside[:, :-1] != inside[:, 1:]                             # edge (i,j)-(i,j+1)
+    cross = np.concatenate([
+        crossings(cover[mix_t], cover[i2][mix_t], P[mix_t], P[i2][mix_t]),
+        crossings(cover[:, :-1][mix_z], cover[:, 1:][mix_z], P[:, :-1][mix_z], P[:, 1:][mix_z])])
+    n_t = int(mix_t.sum())
+    id_t = np.full(mix_t.shape, -1, dtype=np.int64)
+    id_t[mix_t] = np.arange(n_t)
+    id_z = np.full(mix_z.shape, -1, dtype=np.int64)
+    id_z[mix_z] = n_t + np.arange(int(mix_z.sum()))
+
+    # per cell (T, n-1): its corners a b c d, their state, and the crossings on ab bc cd da
+    def cells(a):
+        return [a[:, :-1], a[i2][:, :-1], a[i2][:, 1:], a[:, 1:]]
+
+    ins = cells(inside)
+    case = ins[0] * 1 + ins[1] * 2 + ins[2] * 4 + ins[3] * 8
+    edges = [id_t[:, :-1], id_z[i2], id_t[:, 1:], id_z]
+    picks = {c: case == c for c in range(1, 16)}
+
+    def build(slots, table):
+        out = []
+        for c, tris in table.items():
+            sel = picks[c]
+            if sel.any():
+                sl = [x[sel] for x in slots]
+                out += [np.stack([sl[a], sl[b], sl[d]], axis=1) for a, b, d in tris]
+        return np.concatenate(out)
+
+    # the wall: every cell the outline touches is re-made, split along the outline
+    on_grid = (faces < T * K).all(axis=1)
+    fi, fk = faces // K, faces % K - k0
+    kmin, kmax, imin, imax = fk.min(axis=1), fk.max(axis=1), fi.min(axis=1), fi.max(axis=1)
+    in_band = on_grid & (kmin >= 0) & (kmax <= n - 1) & (kmax - kmin == 1)
+    col = np.where(imax - imin == 1, imin, imax)          # the last column wraps to the first
+    drop = np.zeros(len(faces), dtype=bool)
+    drop[in_band] = case[col[in_band], kmin[in_band]] > 0
+
+    base = len(verts)
+    slots = cells(grid) + [e + base for e in edges]
+    new = np.concatenate([build(slots, _MS_IN), build(slots, _MS_OUT)])
+    flat = np.concatenate([verts, cross])                 # before the cut: all still in the wall
+
+    def outward(f):
+        tri = flat[f]
+        nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        return float((nrm[:, :2] * tri[:, 0, :2]).sum())
+
+    flip = outward(new) * outward(faces[drop]) < 0        # match the winding of what it replaces
+    if flip:
+        new = new[:, ::-1]
+    cut = flat.copy()
+    gi = grid[inside]
+    r = np.hypot(cut[gi, 0], cut[gi, 1])
+    cut[gi, :2] *= ((r - depth) / r)[:, None]
+    out_faces = np.concatenate([faces[~drop], new])
+
+    # the letters: the covered pieces of those cells, once on the wall's surface and
+    # once on the floor of the cut, joined along the outline (where the depth is zero)
+    n_in = len(gi)
+    idx = np.full(grid.shape, -1, dtype=np.int64)
+    idx[inside] = np.arange(n_in)
+    corners = cells(idx)
+    ends = [e + 2 * n_in for e in edges]
+    outer = build(corners + ends, _MS_IN)
+    inner = build([c + n_in for c in corners] + ends, _MS_IN)
+    if flip:
+        outer = outer[:, ::-1]
+    else:
+        inner = inner[:, ::-1]
+    lv = np.concatenate([flat[gi], cut[gi], cross])
+    lf = np.concatenate([outer, inner])
+    if mesh_volume(lv, lf) < 0:
+        lf = lf[:, ::-1].copy()
+    return cut, out_faces, (lv, lf)
 
 
 def edge_check(faces) -> tuple[bool, str]:

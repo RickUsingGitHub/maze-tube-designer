@@ -30,7 +30,7 @@ class TubeParams:
     base_text: str = ""           # round the body's grip band, likewise
     text_height: float = 6.0      # height of capital letters (mm)
     text_depth: float = 0.6       # how far the text stands out / is cut in (mm)
-    text_engrave: bool = False    # False = raised (embossed), True = cut in (engraved)
+    text_style: int = 0           # 0 raised, 1 engraved, 2 flush in a second colour
 
     # --- maze ------------------------------------------------------------
     rows: int = 0                 # maze rows along the tube axis (0 = auto from maze_length)
@@ -99,6 +99,10 @@ class TubeParams:
             except (TypeError, ValueError):
                 continue
             setattr(p, k, v)
+        if "text_style" not in d and d.get("text_engrave"):
+            p.text_style = 1               # older designs had just an "engraved" switch
+        if p.text_style not in (0, 1, 2):
+            p.text_style = 0
         if "detent_level" not in d:
             # older designs stored a per-nub interference that locked far too hard;
             # keep only whether they had a click at all, at the gentle setting

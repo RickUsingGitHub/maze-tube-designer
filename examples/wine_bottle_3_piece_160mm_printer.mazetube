@@ -17,7 +17,7 @@
     "base_text": "",
     "text_height": 8.0,
     "text_depth": 0.6,
-    "text_engrave": false,
+    "text_style": 0,
     "rows": 0,
     "maze_length": 100.0,
     "columns": 0,

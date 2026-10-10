@@ -14,7 +14,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mazetube.geometry import TubeDesign, edge_check, mesh_volume, print_plate  # noqa: E402
+import mazetube.geometry as geometry  # noqa: E402
+from mazetube.geometry import (TubeDesign, edge_check, mesh_volume, print_plate,  # noqa: E402
+                               print_plate_text)
 from mazetube.maze import ALGORITHMS, generate  # noqa: E402
 from mazetube.params import TubeParams  # noqa: E402
 from mazetube.stl import write_stl  # noqa: E402
@@ -45,6 +47,12 @@ def check_design(p: TubeParams, label: str, walls=True):
     pieces = [(pt.name, (pt.verts, pt.faces)) for pt in d.parts()]
     if d.three:
         pieces.append(("whole cap", (cv, cf)))
+    for pt in d.parts():
+        if pt.inlay is not None:
+            pieces.append((pt.name + " letters", pt.inlay))
+            r = np.hypot(pt.inlay[0][:, 0], pt.inlay[0][:, 1])
+            assert r.max() <= d.R_out + 1e-9, f"{label} {pt.name}: letters stand proud"
+            assert r.min() >= d.R_out - 1.5 - p.grip_depth - 1e-9, f"{label} {pt.name}: letters too deep"
     for nm, (v, f) in pieces:
         ok, msg = edge_check(f)
         assert ok, f"{label} {nm}: {msg}"
@@ -175,6 +183,7 @@ def main():
     check_auto_sizing()
     check_three_pieces()
     check_text()
+    check_two_colour_text()
     check_bed_and_exports()
     check_map_window()
     check_click()
@@ -304,14 +313,14 @@ def check_text():
     assert d.z0 > plain.z0, "the grip band grows to hold the base text"
     assert d.M == plain.M, "... without costing a maze row"
 
-    d = check_design(TubeParams(cap_text="Happy Birthday", base_text="Rick", text_engrave=True),
+    d = check_design(TubeParams(cap_text="Happy Birthday", base_text="Rick", text_style=1),
                      "text engraved")
     cap = d.parts()[1]
     r = np.hypot(cap.verts[:, 0], cap.verts[:, 1])
     assert abs(r.max() - d.R_out) < 1e-6 and mesh_volume(cap.verts, cap.faces) < v_plain["cap"] - 20
 
     d = check_design(TubeParams(cap_text="Happy Birthday", base_text="Rick", vase_mode=True,
-                                path_width=5.2, text_engrave=True), "text, spiral vase")
+                                path_width=5.2, text_style=1), "text, spiral vase")
     assert d.bands["cap"].depth > 0 > d.bands["base"].depth        # cap forced to raised
 
     # several short lines: stacked, level, centred - and the letters keep their size
@@ -388,6 +397,97 @@ def check_text():
     print("text: raised / engraved / vase / stacked lines / spiral poem / three pieces  OK")
 
 
+def check_two_colour_text():
+    """Flush lettering for a second colour: separate solids that fill their cut-outs exactly."""
+    # the cut itself, on a plain drum with a random pattern (every marching-squares case)
+    T, K = 40, 30
+    th = np.linspace(0.0, 2 * np.pi, T, endpoint=False)
+    zz = np.linspace(0.0, 20.0, K)
+    drum = geometry._sweep(th, np.full((T, K), 15.0), zz, 0.0, 20.0)
+    rng = np.random.default_rng(5)
+    seen = set()
+    for trial in range(6):
+        cover = rng.random((T, 20))
+        if trial >= 3:                                   # blobs rather than speckle
+            cover = (cover + np.roll(cover, 1, 0) + np.roll(cover, 1, 1) + np.roll(cover, (1, 1), (0, 1))) / 4
+            cover = np.clip((cover - 0.5) * 4 + 0.5, 0, 1)
+        v, f, letters = geometry._inlay_cut(*drum, T, 5, cover, 0.8)
+        lv, lf = letters
+        assert edge_check(f)[0] and edge_check(lf)[0]
+        vol, lvol = mesh_volume(v, f), mesh_volume(lv, lf)
+        assert lvol > 0 and abs(vol + lvol - mesh_volume(*drum)) < 1e-6, "letters must fill the cut exactly"
+        assert len(v) == len(drum[0]) + (len(lv) - 2 * int(((cover > 0.5)[:, 1:-1]).sum()))
+        inside = cover > 0.5
+        inside[:, 0] = inside[:, -1] = False
+        i2 = (np.arange(T) + 1) % T
+        case = (inside[:, :-1] * 1 + inside[i2][:, :-1] * 2 + inside[i2][:, 1:] * 4 + inside[:, 1:] * 8)
+        seen |= set(np.unique(case).tolist())
+    assert seen == set(range(16)), f"cases not exercised: {set(range(16)) - seen}"
+    assert geometry._inlay_cut(*drum, T, 5, np.zeros((T, 20)), 0.8)[2] is None
+
+    words = dict(cap_text="Happy Birthday", base_text="Rick")
+    d = check_design(TubeParams(**words, text_style=2), "text in a second colour")
+    body, cap = d.parts()
+    assert body.inlay is not None and cap.inlay is not None and set(d.inlays) == {"cap", "base"}
+    for pt in (body, cap):
+        r = np.hypot(pt.verts[:, 0], pt.verts[:, 1])
+        assert abs(r.max() - d.R_out) < 1e-9, "flush: nothing stands out from the wall"
+        lr = np.hypot(pt.inlay[0][:, 0], pt.inlay[0][:, 1])
+        assert abs(lr.max() - d.R_out) < 1e-9 and abs(lr.min() - (d.R_out - 0.8)) < 1e-9
+    band = d.bands["cap"]
+    assert band.inlay and abs(band.depth + 0.8) < 1e-9, "deep enough for two printed walls"
+    assert "second colour" in d.info()["Text"]
+    # piece + letters = the piece as it would be without the cut
+    cut = geometry._inlay_cut
+    try:
+        geometry._inlay_cut = lambda v, f, *a: (v, f, None)
+        whole = TubeDesign(TubeParams(**words, text_style=2)).parts()
+    finally:
+        geometry._inlay_cut = cut
+    for pt, uncut in zip((body, cap), whole):
+        total = mesh_volume(pt.verts, pt.faces) + mesh_volume(*pt.inlay)
+        assert abs(total - mesh_volume(uncut.verts, uncut.faces)) < 1e-6, pt.name
+    # the letters are the size of the text: covered area x depth, less the sloping edges
+    th, z = np.sort(band.theta_lines()), band.z_lines()
+    covered = (np.abs(band.sample(th, z)) / 0.8 > 0.5).mean() * band.width * band.height
+    assert 0.75 * covered * 0.8 < mesh_volume(*cap.inlay) < 1.05 * covered * 0.8
+    # in print orientation the letters stay inside their piece
+    for pt in (body, cap):
+        pv, lv = pt.print_verts(), pt.inlay_print_verts()
+        assert lv[:, 2].min() > pv[:, 2].min() + 0.5 and lv[:, 2].max() < pv[:, 2].max() - 0.5
+
+    # the Depth setting can make them deeper, never shallower; a thin wall limits it
+    assert abs(TubeDesign(TubeParams(**words, text_style=2, text_depth=1.1)).bands["cap"].depth + 1.1) < 1e-9
+    d = TubeDesign(TubeParams(**words, text_style=2, auto_size=False, cap_wall=1.4))
+    assert abs(d.bands["cap"].depth + 0.6) < 1e-9
+    d = TubeDesign(TubeParams(**words, text_style=2, auto_size=False, cap_wall=1.1))
+    assert "cap" not in d.bands and any("too thin for second-colour" in w for w in d.warnings)
+
+    poem = ("Roses are red, violets are blue,\nthis little tube has a maze just for you.\n"
+            "Twist it and turn it, feel your way through")
+    d = check_design(TubeParams(cap_text=poem, text_style=2), "poem in a second colour")
+    assert d.bands["cap"].spiral and d.parts()[1].inlay is not None
+    d = check_design(TubeParams(content_diameter=77, content_length=300, printer_height=160,
+                                cap_text="Cheers!", base_text="2026", text_style=2),
+                     "second colour, three pieces")
+    body, ext, cap = d.parts()
+    assert d.three and body.inlay is not None and ext.inlay is None and cap.inlay is not None
+    d = check_design(TubeParams(cap_text="Grip", text_style=2, auto_size=False, grip_flutes=24),
+                     "second colour on flutes")
+    assert d.parts()[1].inlay is not None
+
+    # spiral vase printing is one continuous wall: no second colour there
+    d = check_design(TubeParams(**words, text_style=2, vase_mode=True, path_width=5.2),
+                     "second colour asked, vase")
+    assert not d.inlays and d.bands["cap"].depth > 0 and any("Second-colour" in n for n in d.notes)
+
+    # designs saved when there was only an "engraved" switch
+    assert TubeParams.from_dict({"text_engrave": True}).text_style == 1
+    assert TubeParams.from_dict({"text_engrave": False}).text_style == 0
+    assert TubeParams.from_dict({"text_style": 7}).text_style == 0
+    print("two-colour text: exact cut-outs, flush, 2 walls deep, poem / three pieces / flutes  OK")
+
+
 def check_bed_and_exports():
     """Bed check, plate layout, 3MF round trip, gift tag."""
     from mazetube.threemf import read_3mf, write_3mf
@@ -425,9 +525,54 @@ def check_bed_and_exports():
             assert np.abs(v - v0).max() < 1e-4 and np.allclose(at, at0, atol=1e-3)
             assert 0 <= at[0] - d.R_max and at[0] + d.R_max <= d.p.bed_x
 
-    # gift tag (needs Qt's GUI classes)
+    # second-colour lettering: each piece and its letters as one object with two parts
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
+    from mazetube.app import plate_objects, write_part_stls
+    import zipfile
+    d = TubeDesign(TubeParams(cap_text="Hi", base_text="2026", text_style=2))
+    tmp = tempfile.mkdtemp()
+    objs, fits = plate_objects(d, "t", (d.p.bed_x / 2, d.p.bed_y / 2))
+    assert fits and [len(o[4]) for o in objs] == [1, 1]
+    path = os.path.join(tmp, "two.3mf")
+    write_3mf(path, objs, "test")
+    xml = zipfile.ZipFile(path).read("3D/3dmodel.model").decode()
+    assert xml.count("<item ") == 2 and xml.count("<components>") == 2 and "<basematerials" in xml
+    # the part list Orca-family slicers read: names, and filament 2 for the letters
+    import re
+    import xml.etree.ElementTree as ET
+    cfg = ET.fromstring(zipfile.ZipFile(path).read("Metadata/model_settings.config"))
+    items = re.findall(r'<item objectid="(\d+)"', xml)
+    assert [o.get("id") for o in cfg.findall("object")] == items
+    for o in cfg.findall("object"):
+        comps = re.search(rf'<object id="{o.get("id")}"[^>]*>\s*<components>(.*?)</components>', xml, re.S)
+        parts = o.findall("part")
+        assert [pt.get("id") for pt in parts] == re.findall(r'objectid="(\d+)"', comps.group(1))
+        meta = [{m.get("key"): m.get("value") for m in pt.findall("metadata")} for pt in parts]
+        assert [m["extruder"] for m in meta] == ["1", "2"] and meta[1]["name"].endswith(" text")
+        assert all(pt.get("subtype") == "normal_part" for pt in parts)
+    assert 'Extension="config"' in zipfile.ZipFile(path).read("[Content_Types].xml").decode()
+    plain_path = os.path.join(tmp, "plain.3mf")
+    write_3mf(plain_path, plate_objects(TubeDesign(TubeParams()), "p")[0], "test")
+    assert "Metadata/model_settings.config" not in zipfile.ZipFile(plain_path).namelist()
+    back = read_3mf(path)
+    assert [b[0] for b in back] == ["t body", "t body text", "t cap", "t cap text"]
+    for k in (0, 2):
+        (_, v, f, at), (_, tv, tf, tat) = back[k], back[k + 1]
+        assert edge_check(f)[0] and edge_check(tf)[0] and at == tat, "letters travel with their piece"
+        assert (tv.min(axis=0) > v.min(axis=0) - 1e-4).all() and (tv.max(axis=0) < v.max(axis=0) + 1e-4).all()
+    pv, pf = print_plate(d)
+    tv, tf = print_plate_text(d)
+    assert edge_check(tf)[0] and (tv.min(axis=0) >= pv.min(axis=0) - 1e-6).all()
+    assert (tv.max(axis=0) <= pv.max(axis=0) + 1e-6).all()
+    assert print_plate_text(TubeDesign(TubeParams(cap_text="Hi"))) is None
+    cap = d.parts()[1]
+    files = write_part_stls(os.path.join(tmp, "x_cap"), cap, "x cap")
+    assert [os.path.basename(f) for f in files] == ["x_cap.stl", "x_cap_text.stl"]
+    assert os.path.getsize(files[1]) == 84 + 50 * len(cap.inlay[1])
+    assert len(write_part_stls(os.path.join(tmp, "y_cap"), TubeDesign(TubeParams()).parts()[1], "y")) == 1
+
+    # gift tag (needs Qt's GUI classes)
     from mazetube.gifttag import save_gift_tag
     tmp = tempfile.mkdtemp()
     d = TubeDesign(TubeParams(cap_text="Happy Birthday"))
@@ -437,7 +582,7 @@ def check_bed_and_exports():
         data = open(path, "rb").read()
         assert data[:4] == magic and len(data) > 15000, f"gift tag {ext} looks empty"
     assert app is not None
-    print("bed check, plate layout, 3MF round trip, gift tag  OK")
+    print("bed check, plate layout, 3MF round trip, two-colour exports, gift tag  OK")
 
 
 def check_map_window():
