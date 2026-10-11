@@ -129,13 +129,15 @@ SPEC = [
          "Place home and exit to give the longest possible solution."),
         ("notch_depth", "Home notch", "float", 0.0, 6.0, 0.1, " mm",
          "Extra drop at the home position so the cap only closes flush there (0 = off).\n"
-         "Deepened automatically when a detent is used."),
+         "Used when Click shut is Off; the twist lock has its own row instead."),
         ("detent_level", "Click shut", "choice", [(0, "Off"), (1, "Light"), (2, "Medium"),
                                                   (3, "Firm")], None, None, "",
-         "A click that holds the cap at the fully closed position: one nub snaps over a small\n"
-         "ridge. Light needs roughly 6 N (0.6 kg) of pull to open, Medium 12 N, Firm 20 N -\n"
-         "estimates for PLA, so start with Light (PETG and ABS flex more: a lighter click).\n"
-         "Opening always takes less force than closing."),
+         "A twist lock at the closed position. One extra row below the maze: push the cap\n"
+         "down, then turn it clockwise (seen from its closed end) until it clicks into a\n"
+         "pocket. Locked, it cannot be pulled off; turn it anticlockwise to release it.\n"
+         "Light, Medium and Firm set the click (one nub rides over a small ridge): roughly\n"
+         "6, 12 and 20 N at the rim, rough estimates for PLA. Start with Light.\n"
+         "Off: no lock row, the cap just drops into the home notch."),
         ("detent", "Click flex", "float", 0.0, 1.5, 0.05, " mm|Automatic",
          "How far the cap rim has to flex to pass the click ridge. Automatic sizes it from\n"
          "the setting above and the cap's stiffness. Set a value to tune it by hand."),
@@ -878,10 +880,12 @@ class MainWindow(QMainWindow):
                                 f"solution with {fit_gap:.2f} mm clearance.</p>")
                 else:
                     html.append(f"<p class='e'>✘ Fit check failed (gap {fit_gap:.2f} mm).</p>")
-                if d.detent_h > 0:
-                    html.append(f"<p class='ok'>✔ Click shut: one nub snaps over a "
-                                f"{d.detent_h:.2f} mm ridge into a free pocket. Estimated pull "
-                                f"to open: {d.open_force:.0f} N ({d.open_force / 9.81:.1f} kg).</p>")
+                if d.lock_cols:
+                    click = (f" One nub clicks over a {d.detent_h:.2f} mm ridge on the way."
+                             if d.detent_h > 0 else "")
+                    html.append(f"<p class='ok'>✔ Twist lock: push the cap down, then turn it "
+                                f"{d.lock_way} (seen from its closed end) into its pocket.{click} "
+                                f"Locked, it cannot be pulled off: turn it {d.unlock_way} first.</p>")
             for note in d.notes:
                 html.append(f"<p class='k'>ℹ {note}</p>")
         if warnings:
@@ -1342,7 +1346,10 @@ def main(argv=None):
     win.show()
 
     # optional: open a design given on the command line
-    files = [a for a in argv[1:] if not a.startswith("--") and os.path.isfile(a)]
+    valued = ("--screenshot", "--mode", "--export-test", "--pose", "--yaw", "--pitch", "--zoom",
+              "--target")                      # developer options that take a value
+    files = [a for i, a in enumerate(argv) if i > 0 and not a.startswith("--")
+             and argv[i - 1] not in valued and os.path.isfile(a)]
     if files:
         win.load_file(files[0])
 

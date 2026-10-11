@@ -97,8 +97,9 @@ def render_gift_tag(painter: QPainter, page: QRectF, design, name: str = "",
     steps = ("1.  Pegs inside the cap run in a maze hidden underneath it.\n\n"
              "2.  Twist and slide the cap to feel your way through. Dead ends are part of the fun.\n\n"
              "3.  When the pegs reach the top, the cap lifts off.\n\n"
-             "4.  To lock it again, guide the cap back down and push it home"
-             + (" until it clicks." if design.detent_h > 0 else "."))
+             "4.  To lock it again, guide the cap back down"
+             + (", then turn it until it " + ("clicks." if design.detent_h > 0 else "stops.")
+                if design.lock_cols else " and push it home."))
     _text(painter, QRectF(r.left(), r.top() + 17 * mm, r.width(), 70 * mm), steps, 3.9, mm,
           flags=Qt.AlignLeft | Qt.AlignTop)
     box = QRectF(r.left(), r.bottom() - 40 * mm, r.width(), 26 * mm)

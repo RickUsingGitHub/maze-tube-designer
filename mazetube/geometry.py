@@ -34,8 +34,10 @@ from .textmask import layout_text
 EPS = 0.05          # width of the near-vertical step facets (mm)
 PLA_E = 3000.0      # stiffness of printed PLA (MPa), for the click-force estimate
 FRICTION = 0.3      # PLA sliding on PLA
-CLICK_FORCE = {1: 6.0, 2: 12.0, 3: 20.0}     # pull to open (N): light, medium, firm
+CLICK_FORCE = {1: 6.0, 2: 12.0, 3: 20.0}     # push round the rim to pass the click (N): light, medium, firm
 CLICK_NAME = {1: "light", 2: "medium", 3: "firm"}
+LOCK_TURN = -1      # the last move when closing, seen from above the cap's closed end:
+                    # -1 = the cap turns clockwise to lock (anticlockwise opens), +1 the reverse
 INLAY_DEPTH = 0.8   # second-colour text goes at least this deep: two printed walls (mm)
 TWO_PI = 2.0 * math.pi
 
@@ -96,6 +98,7 @@ class TubeDesign:
         self.notch = p.notch_depth if p.notch_depth >= 0.3 else 0.0
         self.detent = 0.0             # click: how far the cap rim has to flex (mm)
         self.detent_h = 0.0           # height of the ridge that makes it
+        self.lock_cols = 0            # twist lock: columns the cap turns into its pocket (0 = none)
         # glued joint of a three-piece tube (extension + cap end)
         self.j = max(4.0, p.joint_length)
         self.cj = 0.5 * self.c                              # joint clearance: a glue fit
@@ -376,27 +379,32 @@ class TubeDesign:
                                   "it is an open tube.")
         if self.nub_arc < 1.5:
             self.warnings.append(f"Nubs are narrow ({self.nub_arc:.2f} mm) and may snap.")
-        if self.detent_h > 0 and self.open_force > 30:
-            self.warnings.append(f"The click may need about {self.open_force:.0f} N "
-                                 f"({self.open_force / 9.81:.1f} kg) of pull to open - hard to "
-                                 f"do by hand. Use a gentler setting.")
+        if self.detent_h > 0 and self.open_force * self.R_out > 1500:        # N mm of twist
+            self.warnings.append(f"The click may need about {self.open_force:.0f} N at the rim "
+                                 f"to turn past - hard to do by hand. Use a gentler setting.")
 
     # ---------------------------------------------------------------- detent
     def _plan_detent(self):
-        """Size the click that holds the cap at the closed position.
+        """Plan the twist lock that holds the cap at the closed position.
 
-        A ramped ridge crosses the floor of ONE home notch.  Closing pushes
-        that nub over it and into the pocket below; opening pushes it back.
+        Below the maze there is one extra row.  The home column drops into it,
+        and from there the cap turns clockwise (seen from above its closed end;
+        see LOCK_TURN) into a pocket that lies under solid wall.  Shut, the cap
+        cannot be pulled off at all; it has to be turned back, anticlockwise,
+        first.
+
+        A ramped ridge across the floor of ONE of those slots gives the click:
+        that nub rides over it on the way into the pocket and on the way out.
         To pass, the cap first shifts sideways by the fit clearance, then its
         rim flexes into a slight oval - a soft, predictable spring.  (A ridge
         under every nub would lock the rim into a far stiffer shape: with
         three nubs that takes roughly thirty times the force.)
 
-        The ridge height comes from the pull wanted to open the cap and an
-        estimate of the rim's stiffness, so the click feels similar on any
-        tube.  The side the nub climbs when opening is the gentler one,
-        because pulling a smooth cap is harder than pushing it.  The notch is
-        deepened so the nub clears the ridge in the pocket and in row 0.
+        Turning a cap is much easier than pulling a smooth one, so the click
+        only has to be felt and to stop the cap turning back by itself.  The
+        ridge height comes from the push wanted round the rim and an estimate
+        of the rim's stiffness.  The slot is made as many columns long as the
+        ridge needs between the nub's two resting places.
         """
         p = self.p
         level = int(p.detent_level)
@@ -407,42 +415,59 @@ class TubeDesign:
         r_mid = self.r_cap_in + 0.5 * t
         width = 1.5 * math.sqrt(r_mid * t)                  # length of rim that flexes with the nub
         self.rim_give = 0.149 * r_mid ** 3 / (PLA_E * width * t ** 3 / 12.0)   # mm of oval per N
-        up, down = 1.2, 2.0                                 # ramp lengths / ridge height
-        phi = math.atan(FRICTION)
-        k_close = math.tan(math.atan(1.0 / up) + phi) + FRICTION    # axial push per N of spring
-        k_open = math.tan(math.atan(1.0 / down) + phi) + FRICTION
+        ramp = 1.2                                          # ramp length / ridge height (~40°), both sides
+        k_twist = math.tan(math.atan(1.0 / ramp) + math.atan(FRICTION)) + FRICTION   # push per N of spring
+        self.gap_pocket, gap_home = 0.05, 0.2               # free floor beside the resting nub (mm)
+
+        def room(cols):                                     # floor between the two resting places
+            return (cols * self.P_th - self.nub_th) * self.r_floor - self.gap_pocket - gap_home
+
         most = self.d - 0.3 - 2 * self.c                    # ridge must stay inside the groove
-        if p.detent >= 0.05:
+        by_hand = p.detent >= 0.05
+        flex = 0.0
+        if by_hand:
             flex = p.detent
             if flex > most + 1e-9:
                 self.errors.append("The click interference is too large for this groove depth - "
                                    "reduce it or deepen the grooves.")
                 return
-        else:
-            if most < 0.15:
-                self.notes.append("The grooves are too shallow for a click at the closed "
-                                  "position - left off.")
-                return
+        elif most >= 0.15:
             want = CLICK_FORCE.get(level, 6.0)
-            flex = min(max(self.rim_give * want / k_open, 0.15), most)
-            got = flex / self.rim_give * k_open
+            flex = min(max(self.rim_give * want / k_twist, 0.15), most)
+            got = flex / self.rim_give * k_twist
             if got < 0.6 * want:
                 self.notes.append(
-                    f"The click is as firm as this cap allows: about {got:.1f} N to open (the "
+                    f"The click is as firm as this cap allows: about {got:.1f} N at the rim (the "
                     f"{CLICK_NAME.get(level, 'chosen')} setting aims for {want:.0f} N). A thicker "
                     f"cap wall or deeper grooves would make it firmer.")
-        self.detent = flex
-        self.detent_h = 2 * self.c + flex                   # clearance at the tip + sideways shift
-        self.ridge_up = up * self.detent_h                  # closing side, above the peak (~40°)
-        self.ridge_dn = down * self.detent_h                # opening side, towards the pocket (~27°)
-        self.open_force = flex / self.rim_give * k_open
-        self.close_force = flex / self.rim_give * k_close
-        tip_h = self.wp - 2 * self.c - self.dk              # flat face of the nub tip
-        gap_pocket, gap_cell = 0.05, 0.2
-        self.ridge_off = self.c + tip_h + gap_pocket        # lower foot, above the notch floor
-        need = tip_h + gap_pocket + self.ridge_dn + self.ridge_up + gap_cell
-        if self.notch < need:
-            self.notch = math.ceil(need * 10.0) / 10.0
+        else:
+            self.notes.append("The grooves are too shallow for a click ridge - the cap still "
+                              "turns into its lock, without a click.")
+
+        longest = self.Ns - 1                               # the slot must end before the next home
+        cols = 1
+        if flex > 0:
+            need = 2 * ramp * (2 * self.c + flex)
+            cols = next((k for k in range(1, longest + 1) if room(k) >= need - 1e-9), 0)
+            if not cols:                                    # no slot is long enough: a lower ridge
+                cols = longest
+                fits = room(cols) / (2 * ramp) - 2 * self.c
+                if by_hand:
+                    self.errors.append(
+                        f"The click ridge does not fit between the maze columns - at most "
+                        f"{max(fits, 0.0):.2f} mm here. Reduce it, or use wider walls or fewer nubs.")
+                    return
+                flex = fits if fits >= 0.1 else 0.0
+                self.notes.append(
+                    "The lock slot is too short for the full click ridge - "
+                    + ("the click is lighter." if flex else "the cap turns into its lock without a click."))
+        self.lock_cols = cols
+        self.notch = self.wp + self.ww                      # the lock row and the wall over it
+        if flex > 0:
+            self.detent = flex
+            self.detent_h = 2 * self.c + flex               # clearance at the tip + sideways shift
+            self.ridge_in = self.ridge_out = ramp * self.detent_h   # arc on the floor: home side, pocket side
+            self.open_force = self.close_force = flex / self.rim_give * k_twist
 
     # ---------------------------------------------------------------- layout
     def _build_layout(self):
@@ -475,7 +500,10 @@ class TubeDesign:
             kinds.append(kind)
 
         add(self.ww, ("margin", -1))
-        if self.notch > 0:
+        if self.lock_cols:
+            add(self.wp, ("lock", -1))                  # the row the cap turns in to lock
+            add(self.ww, ("lockwall", -1))              # solid over the pocket, open at home
+        elif self.notch > 0:
             add(self.notch, ("notch", -1))
         for r in range(M):
             add(self.wp, ("cell", r))
@@ -496,8 +524,16 @@ class TubeDesign:
                 col = bt // 2
                 sc = col % Ns
                 is_cell = bt % 2 == 1
-                if kind == "notch":
+                if kind in ("notch", "lockwall"):
                     op[bz, bt] = is_cell and sc == mz.home
+                elif kind == "lock":                    # home, then round to the pocket
+                    along = ((sc - mz.home) * LOCK_TURN) % Ns       # columns from home, towards it
+                    if is_cell:
+                        op[bz, bt] = along <= self.lock_cols
+                    elif LOCK_TURN > 0:                 # this wall column lies before cell `col`
+                        op[bz, bt] = 1 <= along <= self.lock_cols
+                    else:
+                        op[bz, bt] = along <= self.lock_cols - 1
                 elif kind == "cell":
                     op[bz, bt] = True if is_cell else bool(mz.h_open[r, (col - 1) % Ns])
                 elif kind == "wall":
@@ -511,10 +547,7 @@ class TubeDesign:
         floor = np.zeros_like(op)
         floor[1:] = op[1:] & ~op[:-1]
         self.floor = floor
-        self.home_cols = np.array([bt % 2 == 1 and (bt // 2) % Ns == mz.home for bt in range(Bt)])
-        self.ridge_cols = np.arange(Bt) == 2 * mz.home + 1          # the click: one notch only
-        if self.detent_h > 0:
-            self.z_ridge = self.z_notch_floor + self.ridge_off + self.ridge_dn      # its peak
+        self.bz_lock = next((i for i, (kind, _) in enumerate(kinds) if kind == "lock"), -1)
 
         self.lead = min(0.6, self.d * 0.5)  # lead-in chamfer on the body rim
 
@@ -541,8 +574,16 @@ class TubeDesign:
         self.H_cap = self.H_ci + p.cap_top
         self.zn0 = self.ww + self.c                 # nub bottom (cap coords)
         self.zn1 = self.ww + self.wp - self.c       # nub top at the wall
+        # closed = at rest in the lock pocket (or the home notch when there is no lock)
         self.nub_angles = np.array(
-            [self.cell_theta(mz.home + j * Ns) for j in range(self.n)])
+            [self.cell_theta(mz.home + LOCK_TURN * self.lock_cols + j * Ns) for j in range(self.n)])
+        if self.detent_h > 0:
+            # the click: ONE ridge, across nub 0's slot, just on the home side of its pocket
+            a_in, a_out = self.ridge_in / self.r_floor, self.ridge_out / self.r_floor
+            foot = self.nub_angles[0] - LOCK_TURN * (0.5 * self.nub_th + self.gap_pocket / self.r_floor)
+            self.th_ridge = foot - LOCK_TURN * a_out        # its peak
+            # how far it reaches clockwise / anticlockwise of the peak
+            self.a_lo, self.a_hi = (a_out, a_in) if LOCK_TURN < 0 else (a_in, a_out)
         will_split = p.pieces == 3 or self._want3 or (
             p.pieces == 0 and not self.auto and self.H_cap > p.printer_height + 0.05)
         if not will_split:
@@ -753,10 +794,10 @@ class TubeDesign:
         if self.vase:                                      # 45° shoulder the cap rim seats on
             seat = self.r_cap_in - (z - self.z0)
             r = np.where(z <= self.z0 + self.c, np.maximum(r, seat), r)
-        if self.detent_h > 0:                              # click ridge in one home notch
-            t = np.minimum((z - (self.z_ridge - self.ridge_dn)) / self.ridge_dn,
-                           ((self.z_ridge + self.ridge_up) - z) / self.ridge_up)
-            on = self.ridge_cols[bt] & inside & (t > 0)
+        if self.detent_h > 0:                              # click ridge across one lock slot
+            dth = np.mod(th - self.th_ridge + math.pi, TWO_PI) - math.pi
+            t = np.minimum((dth + self.a_lo) / self.a_lo, (self.a_hi - dth) / self.a_hi)
+            on = (bz == self.bz_lock) & (t > 0)
             r = np.where(on, np.maximum(r, self.r_floor + self.detent_h * np.clip(t, 0, 1)), r)
         if self.lead > 0:
             r = np.minimum(r, self.r_maze - np.clip(z - (self.H_body - self.lead), 0, None))
@@ -787,10 +828,21 @@ class TubeDesign:
         return r
 
     # ------------------------------------------------------------ grids
-    def _theta_grid(self, breaks, r_ref, bands=()):
-        """Global theta samples: break pairs + uniform fill (+ fine samples under text)."""
+    def _theta_grid(self, breaks, r_ref, bands=(), extra=()):
+        """Global theta samples: break pairs + uniform fill (+ fine samples under text).
+
+        ``extra``: angles that must be sampled too (the feet and peak of a ramp);
+        one that falls on a break pair is moved just clear of it.
+        """
         eps_t = EPS / r_ref
         breaks = np.asarray(breaks, dtype=float)
+        extra = np.mod(np.asarray(extra, dtype=float), TWO_PI)
+        for i, e in enumerate(extra):
+            if len(breaks):
+                off = np.mod(e - breaks + math.pi, TWO_PI) - math.pi
+                j = int(np.argmin(np.abs(off)))
+                if abs(off[j]) < 3 * eps_t:
+                    extra[i] = np.mod(breaks[j] + (3 * eps_t if off[j] >= 0 else -3 * eps_t), TWO_PI)
         lines = np.mod(np.concatenate([breaks - eps_t, breaks + eps_t]), TWO_PI)
         n_u = int(math.ceil(TWO_PI * self.R_out / self.p.resolution))
         if self.p.grip_flutes > 0:
@@ -809,7 +861,7 @@ class TubeDesign:
             dist = np.minimum(dist, np.abs(uni + TWO_PI - srt[-1]))
             dist = np.minimum(dist, np.abs(srt[0] + TWO_PI - uni))
             uni = uni[dist > 3 * eps_t]
-        g = np.unique(np.concatenate([lines, uni]))
+        g = np.unique(np.concatenate([lines, uni, extra]))
         keep = np.concatenate([[True], np.diff(g) > 0.3 * eps_t])   # no sliver columns
         g = g[keep]
         if len(g) > 1 and g[0] + TWO_PI - g[-1] <= 0.3 * eps_t:
@@ -885,7 +937,9 @@ class TubeDesign:
 
     def _make_body(self):
         p = self.p
-        th = self._theta_grid(self.th_edges[:-1], self.r_maze, self._band_list("base"))
+        ridge = ([self.th_ridge - self.a_lo, self.th_ridge, self.th_ridge + self.a_hi]
+                 if self.detent_h > 0 else [])
+        th = self._theta_grid(self.th_edges[:-1], self.r_maze, self._band_list("base"), ridge)
         z_start = self.z0 - self.w_v if self.vase else self.z0
         zl = [z_start, self.z0, self.H_body]
         for i, e in enumerate(self.z_edges[1:-1], start=1):
@@ -898,8 +952,6 @@ class TubeDesign:
             zl.append(self.z0 + self.c)
         if self.lead > 0:
             zl.append(self.H_body - self.lead)
-        if self.detent_h > 0:
-            zl += [self.z_ridge - self.ridge_dn, self.z_ridge, self.z_ridge + self.ridge_up]
         zg = self._uniq(zl, z_start, self.H_body)
 
         R = self.R_out - self.flute(th)                    # (T,)
@@ -1174,7 +1226,11 @@ class TubeDesign:
         """
         mz = self.maze
         frames = [(0.0, 0.0)]
-        phi, Z = 0.0, self.notch
+        phi = 0.0
+        if self.lock_cols:                        # unlock: turn back to the home column
+            phi = -LOCK_TURN * self.lock_cols * self.P_th
+            frames.append((phi, 0.0))
+        Z = self.notch
         if self.notch > 0:
             frames.append((phi, Z))
         for dc, dr in mz.moves:
@@ -1188,7 +1244,9 @@ class TubeDesign:
 
     def solution_columns(self):
         """Columns (lo, hi) the first nub visits along the solution, not wrapped round."""
-        c = lo = hi = self.maze.home
+        c = self.maze.home
+        pocket = c + LOCK_TURN * self.lock_cols   # the route starts in the lock pocket
+        lo, hi = min(c, pocket), max(c, pocket)
         for dc, _ in self.maze.moves:
             c += dc
             lo, hi = min(lo, c), max(hi, c)
@@ -1251,11 +1309,11 @@ class TubeDesign:
         frames = self.solution_keyframes(lift=0.0)
         worst, overlap = float("inf"), 0.0
         for i, ((p0, z0), (p1, z1)) in enumerate(zip(frames, frames[1:])):
-            snap = self.detent_h > 0 and i == 0       # home pocket -> row 0
+            snap = self.detent_h > 0 and i == 0       # out of the lock pocket, over the ridge
             dist = math.hypot((p1 - p0) * self.r_maze, z1 - z0)
             n = max(2, int(dist / (step * (0.25 if snap else 1.0))) + 1)
             for t in np.linspace(0.0, 1.0, n):
-                g = self.min_gap(p0 + (p1 - p0) * t, z0 + (z1 - z0) * t, 16, 64 if snap else 16)
+                g = self.min_gap(p0 + (p1 - p0) * t, z0 + (z1 - z0) * t, 64 if snap else 16, 16)
                 if snap and 0.0 < t < 1.0:
                     overlap = max(overlap, -g)
                 else:
@@ -1263,6 +1321,29 @@ class TubeDesign:
         return worst, overlap
 
     # --------------------------------------------------------------- info
+    @property
+    def lock_way(self) -> str:
+        """Which way the cap turns to lock, seen from above its closed end."""
+        return "clockwise" if LOCK_TURN < 0 else "anticlockwise"
+
+    @property
+    def unlock_way(self) -> str:
+        return "anticlockwise" if LOCK_TURN < 0 else "clockwise"
+
+    def _lock_text(self) -> str:
+        if not self.lock_cols:
+            return "off"
+        turn = math.degrees(self.lock_cols * self.P_th)
+        text = (f"twist lock: push the cap down, then turn it {turn:.0f}° {self.lock_way} "
+                f"(seen from its closed end); {self.unlock_way} unlocks")
+        if self.detent_h > 0:
+            how = "set by hand" if self.p.detent >= 0.05 else CLICK_NAME.get(int(self.p.detent_level), "on")
+            text += (f". Click {how}: about {self.open_force:.0f} N at the rim "
+                     f"(rough estimate for PLA), the rim flexes {self.detent:.2f} mm")
+        else:
+            text += ", no click"
+        return text
+
     def info(self) -> dict:
         p, mz = self.p, self.maze
         parts = self.parts()
@@ -1344,12 +1425,9 @@ class TubeDesign:
             "Maze grid": f"{self.N} columns × {self.M} rows ({self.Ns} per nub)",
             "Path width": f"{self.path_arc_top:.2f} mm (floor {self.path_arc_floor:.2f} mm)",
             "Nub size": f"{self.nub_arc:.2f} × {self.zn1 - self.zn0:.2f} mm, {self.r_cap_in - self.r_tip:.2f} deep",
-            "Home notch": (f"{self.notch:.1f} mm" + (" (deepened to fit)" if self.notch > p.notch_depth + 1e-9 else "")
-                           if self.notch > 0 else "off"),
-            "Home click": (f"{'set by hand' if p.detent >= 0.05 else CLICK_NAME.get(int(p.detent_level), 'on')}"
-                           f": about {self.open_force:.0f} N to open, {self.close_force:.0f} N to "
-                           f"close (estimate for PLA); the rim flexes {self.detent:.2f} mm"
-                           if self.detent_h > 0 else "off"),
+            "Home notch": ("replaced by the twist lock's row" if self.lock_cols
+                           else f"{self.notch:.1f} mm" if self.notch > 0 else "off"),
+            "Home click": self._lock_text(),
             "Solution": f"{len(mz.moves)} moves, {mz.turns()} turns",
             "Dead ends": f"{mz.dead_ends()} per sector",
             "Triangles": " / ".join(f"{pt.name} {len(pt.faces):,}" for pt in parts),

@@ -15,8 +15,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import mazetube.geometry as geometry  # noqa: E402
-from mazetube.geometry import (TubeDesign, edge_check, mesh_volume, print_plate,  # noqa: E402
-                               print_plate_text)
+from mazetube.geometry import (LOCK_TURN, TubeDesign, edge_check, mesh_volume,  # noqa: E402
+                               print_plate, print_plate_text)
 from mazetube.maze import ALGORITHMS, generate  # noqa: E402
 from mazetube.params import TubeParams  # noqa: E402
 from mazetube.stl import write_stl  # noqa: E402
@@ -83,14 +83,22 @@ def check_design(p: TubeParams, label: str, walls=True):
         pv = pt.print_verts()
         assert abs(pv[:, 2].min()) < 1e-6, f"{label} {pt.name}: not on the bed"
         assert abs(pv[:, 2].max() - heights[pt.name]) < 1e-6, f"{label} {pt.name}: wrong height"
+    free = 0.9 * min(d.c, EPS_OK)
+    home_phi = -LOCK_TURN * d.lock_cols * d.P_th       # cap angle with the nubs in the home column
     if d.detent_h > 0:
         expect = d.detent_h - d.c
         assert 0.8 * expect < snap <= expect + 1e-6, f"{label}: detent overlap {snap:.3f} != {expect:.3f}"
-        # the nub rests free in the pocket and in the row-0 cell above the ridge
-        assert d.min_gap(0.0, 0.0, 24, 64) > 0.9 * min(d.c, EPS_OK), f"{label}: pocket too tight"
-        assert d.min_gap(0.0, d.notch, 24, 64) > 0.9 * min(d.c, EPS_OK), f"{label}: ridge hits row 0"
+        # the nub rests free in its pocket, and the ridge leaves the home column clear
+        assert d.min_gap(0.0, 0.0, 64, 24) > free, f"{label}: pocket too tight"
+        assert d.min_gap(home_phi, 0.0, 64, 24) > free, f"{label}: ridge reaches the home column"
+        assert d.min_gap(home_phi, d.notch, 64, 24) > free, f"{label}: ridge hits row 0"
     else:
         assert snap == 0.0
+    if d.lock_cols:
+        # locked: the cap cannot be pulled off or turned further, only turned back as far as home
+        assert d.min_gap(0.0, 0.5 * d.notch) < 0, f"{label}: the locked cap pulls straight off"
+        assert d.min_gap(LOCK_TURN * 0.5 * d.P_th, 0.0) < 0, f"{label}: turns past its pocket"
+        assert d.min_gap(home_phi - LOCK_TURN * 0.5 * d.P_th, 0.0) < 0, f"{label}: turns past home"
 
     # ... and must be blocked by every closed wall
     blocked = 0
@@ -99,7 +107,7 @@ def check_design(p: TubeParams, label: str, walls=True):
         for r in range(mz.rows):
             for c in range(mz.cols):
                 Z = d.notch + r * d.row_pitch
-                phi = (c - mz.home) * d.P_th
+                phi = home_phi + (c - mz.home) * d.P_th
                 # sideways towards c+1
                 if not mz.h_open[r, c]:
                     assert d.min_gap(phi + 0.5 * d.P_th, Z) < 0, f"{label}: h wall {r},{c} passable"
@@ -108,7 +116,7 @@ def check_design(p: TubeParams, label: str, walls=True):
                     assert d.min_gap(phi, Z + 0.5 * d.row_pitch) < 0, f"{label}: v wall {r},{c} passable"
                     blocked += 1
         # cannot rotate out of the home notch
-        if d.notch > 0:
+        if d.notch > 0 and not d.lock_cols:
             assert d.min_gap(0.5 * d.P_th, 0.0) < 0, "notch does not lock"
     if p.auto_size:
         # sized from the contents: they must fit, and both parts must fit the printer
@@ -640,22 +648,34 @@ def check_map_window():
 
 
 def check_click():
-    """The click at the closed position: one ridge, a pull a hand can manage, easier out than in."""
+    """The twist lock: one extra row, a pocket under solid wall, turned into clockwise, one ridge."""
     forces = {}
     for nubs in (1, 2, 3, 4):
-        d = check_design(TubeParams(nubs=nubs), f"click, {nubs} nub(s)")
-        assert d.detent_h > 0 and int(d.ridge_cols.sum()) == 1, "exactly one notch has the ridge"
-        # the ridge really is in one notch only: the other home notches have a plain floor
-        z = np.array([d.z_ridge])
+        d = check_design(TubeParams(nubs=nubs), f"twist lock, {nubs} nub(s)")
+        assert d.lock_cols >= 1 and d.detent_h > 0
+        assert abs(d.notch - d.row_pitch) < 1e-9, "exactly one extra row below the maze"
+        # one ridge only: across nub 0's slot; the other nubs' slots have a plain floor
+        z = np.array([d.z_notch_floor + 0.5 * d.wp])
         for j in range(d.n):
-            r = d.body_radius(np.array([d.nub_angles[j]]), z)[0]
+            r = d.body_radius(np.array([d.th_ridge + j * 2 * np.pi / d.n]), z)[0]
             assert abs(r - (d.r_floor + (d.detent_h if j == 0 else 0.0))) < 1e-9, (nubs, j)
+        # ... and it lies between the nub's two resting places, clear of both
+        nub0, half = d.nub_angles[0], 0.5 * d.nub_th
+        lo, hi = d.th_ridge - d.a_lo, d.th_ridge + d.a_hi
+        home0 = nub0 - LOCK_TURN * d.lock_cols * d.P_th
+        assert min(nub0, home0) + half < lo < hi < max(nub0, home0) - half
         # the cap shifts by the clearance, then flexes: ridge = tip clearance + shift + flex
         assert abs(d.detent_h - (2 * d.c + d.detent)) < 1e-9
-        assert d.ridge_dn > d.ridge_up, "the way out is the gentler ramp"
-        assert d.open_force < d.close_force
+        assert d.open_force == d.close_force, "the same push in as out"
         forces[nubs] = d.open_force
-    # same click whatever the number of nubs, and one a hand can pull open
+        # closing ends with a clockwise turn (seen from above the cap); opening starts anticlockwise
+        frames = d.solution_keyframes(lift=0.0)
+        assert LOCK_TURN == -1 and d.lock_way == "clockwise" and d.unlock_way == "anticlockwise"
+        assert frames[0] == (0.0, 0.0) and frames[1][1] == 0.0 and frames[2][1] == d.notch
+        assert abs(frames[1][0] - d.lock_cols * d.P_th) < 1e-12 and frames[2][0] == frames[1][0]
+        lo_c, hi_c = d.solution_columns()
+        assert lo_c <= d.maze.home - d.lock_cols and hi_c >= d.maze.home, "the map shows the pocket"
+    # same click whatever the number of nubs
     assert max(forces.values()) - min(forces.values()) < 0.5 and 4 < forces[3] < 9, forces
 
     prev = 0.0
@@ -663,23 +683,38 @@ def check_click():
         d = TubeDesign(TubeParams(detent_level=level))
         assert prev < d.open_force <= 25.0, (level, d.open_force)
         assert d.detent_h <= d.d - 0.3 + 1e-9, "ridge stays inside the groove"
+        assert 1 <= d.lock_cols <= d.Ns - 1, "the slot ends before the next nub's home column"
+        room = (d.lock_cols * d.P_th - d.nub_th) * d.r_floor
+        assert d.ridge_in + d.ridge_out <= room - 0.25 + 1e-9, "the ridge fits in its slot"
         prev = d.open_force
-    assert TubeDesign(TubeParams(detent_level=0)).detent_h == 0
+    assert TubeDesign(TubeParams(detent_level=2)).lock_cols == 2, "a bigger ridge gets a longer slot"
+
+    # Off: no lock row, just the home notch
+    d = check_design(TubeParams(detent_level=0), "click off: home notch")
+    assert d.detent_h == 0 and d.lock_cols == 0 and abs(d.notch - 1.5) < 1e-9
+    assert d.solution_keyframes()[1] == (0.0, d.notch)
 
     # set by hand, and the limits
     d = TubeDesign(TubeParams(detent=0.3))
     assert abs(d.detent - 0.3) < 1e-9
     assert TubeDesign(TubeParams(detent=1.4)).errors
-    d = TubeDesign(TubeParams(groove_depth=1.0))
-    assert d.detent_h == 0 and any("too shallow" in n for n in d.notes) and not d.errors
+    d = TubeDesign(TubeParams(groove_depth=1.0))             # too shallow for a ridge: lock, no click
+    assert d.detent_h == 0 and d.lock_cols == 1 and any("too shallow" in n for n in d.notes)
+    assert not d.errors and "no click" in d.info()["Home click"]
     d = TubeDesign(TubeParams(vase_mode=True, path_width=5.2))
     assert any("as firm as this cap allows" in n for n in d.notes)
+    # two columns per nub: the slot can only be one column long, so a big ridge is made lower
+    d = check_design(TubeParams(columns=6, nubs=3, detent_level=3), "twist lock, 2 columns per nub")
+    assert d.Ns == 2 and d.lock_cols == 1 and 0 < d.open_force < 20
+    assert any("too short for the full click ridge" in n for n in d.notes)
+    assert TubeDesign(TubeParams(columns=6, nubs=3, detent=0.9)).errors
 
     # designs saved with the old per-nub interference come back at the gentle setting
     old = TubeParams.from_dict({"nubs": 3, "detent": 0.25, "auto_size": True})
     assert old.detent_level == 1 and old.detent == 0.0
     assert TubeParams.from_dict({"detent": 0.0}).detent_level == 0
-    print(f"click: one ridge, about {forces[3]:.0f} N to open at Light for 1-4 nubs  OK")
+    print(f"twist lock: clockwise into a pocket, one ridge, about {forces[3]:.0f} N at the rim "
+          f"for 1-4 nubs  OK")
 
 
 def check_persistence():

@@ -10,6 +10,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
+from .geometry import LOCK_TURN
+
 TWO_PI = 2.0 * math.pi
 
 
@@ -134,23 +136,25 @@ class MazeMapWidget(QWidget):
                 p.drawRect(QRectF(x0, y0, x1 - x0 + 0.6, y1 - y0 + 0.6))
 
         columns = range(col0, col0 + n_cols)
-        home_cols = [c for c in columns if (c - d.maze.home) % Ns == 0]
+        lock = LOCK_TURN * getattr(d, "lock_cols", 0)  # closed = in the lock pocket, this far round
+        home_cols = [c for c in columns if (c - d.maze.home - lock) % Ns == 0]
         exit_cols = [c for c in columns if (c - d.maze.entry) % Ns == 0]
-        route_home = d.maze.home                       # the highlighted route, not wrapped
+        route_home = d.maze.home + lock                # the highlighted route, not wrapped
         route_exit = d.maze.home + sum(dc for dc, _ in d.maze.moves)
 
-        # home detent ridges
+        # the click ridge: across one lock slot only
         if getattr(d, "detent_h", 0) > 0:
             p.setPen(Qt.NoPen)
             rc = QColor(col["ridge"])
             rc.setAlpha(210)
             p.setBrush(rc)
-            for c in home_cols:
-                if (c - route_home) % N:               # the click ridge is in one notch only
-                    continue
-                i = 2 * (c - col0) + 1
-                y0, y1 = Y(d.z_ridge + d.ridge_up), Y(d.z_ridge - d.ridge_dn)
-                p.drawRect(QRectF(X(edge(i)), y0, X(edge(i + 1)) - X(edge(i)), max(1.5, y1 - y0)))
+            left = (d.th_ridge - d.a_lo - col0 * pitch) % TWO_PI
+            y0, y1 = Y(d.z_notch_floor + d.wp), Y(d.z_notch_floor)
+            turn = 0
+            while left + turn * TWO_PI < span:
+                x0, x1 = X(left + turn * TWO_PI), X(left + turn * TWO_PI + d.a_lo + d.a_hi)
+                p.drawRect(QRectF(x0, y0, max(1.5, x1 - x0), y1 - y0))
+                turn += 1
 
         # sector boundaries, and the one-turn mark when more than a turn is shown
         if d.n > 1:

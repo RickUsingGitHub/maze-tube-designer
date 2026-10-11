@@ -12,9 +12,9 @@ watertight STL files that are already oriented for printing.
 
 ![Maze Tube Designer main window](docs/images/main_window.png)
 
-| Solution animation (X-ray cap) | Click shut: a nub snaps into a pocket when closed |
+| Solution animation (X-ray cap) | Twist lock: the last move is a clockwise turn into a pocket |
 |---|---|
-| ![Solution animation](docs/images/solution_animation.png) | ![Home detent](docs/images/home_detent.png) |
+| ![Solution animation](docs/images/solution_animation.png) | ![Twist lock](docs/images/home_detent.png) |
 | **Spiral vase mode: one continuous 0.6 mm wall** | **Printable maze map with the solution** |
 | ![Vase mode section](docs/images/vase_section.png) | ![Maze map](docs/images/maze_map.png) |
 | **Text: a poem spiralling round the cap** | **Gift tag: the solution folds inside** |
@@ -26,7 +26,8 @@ watertight STL files that are already oriented for printing.
   the seed, add a sideways bias and add extra loops, and home and exit can be placed for the longest
   solution.
 * Use 1–6 nubs; the maze repeats once per nub, so all the nubs move together.
-* A **home notch** and a gentle **click** hold the cap shut at the closed position.
+* A **twist lock** holds the cap shut: push it down, then turn it clockwise until it clicks.
+  Locked, it cannot be pulled off.
 * **45° ceilings** let both parts print without supports.
 * **Spiral vase mode** prints each part as one continuous wall.
 * **Sized from the contents**: presets for bottles, cans, cash and more, kept within your printer's
@@ -125,21 +126,26 @@ never touch the body.
   cap's end come out as open infill, and the maze ridges are hollow outlines.
 * Leave *45° ceilings* on to print without supports. Use 0.2 mm layers or finer.
 * If the fit is too tight, raise the clearance by 0.05 mm and print again. Test with a small, low design first.
-* The **home notch** lets the cap close flush only at the home position, so a finished puzzle always
-  starts from the beginning.
-* **Click shut** holds the cap at the fully closed position: one nub snaps over a small ramped ridge
-  in its home notch and drops into a pocket.
-  * Choose **Off, Light, Medium or Firm**. Light aims for about 6 N (0.6 kg) of pull to open, Medium
-    12 N and Firm 20 N. These are estimates from the cap's size and wall thickness, so start with Light.
-  * The estimate assumes **PLA**. PETG and ABS are about a third less stiff, so the same ridge gives
-    a lighter click in them; go one setting firmer if it feels too weak.
-  * Opening always takes less force than closing, because pulling a smooth cap is harder than pushing it.
+* **Click shut** is a twist lock. There is one extra row below the maze. At the end of the maze the
+  cap drops into it, and the last move is a **clockwise turn** (seen from the cap's closed end) into
+  a pocket under solid wall.
+  * Locked, the cap cannot be pulled off at all, however hard you pull. Turn it **anticlockwise**
+    first; that is the puzzle's first move.
+  * One nub rides over a small ramped ridge on the way into the pocket and on the way out. That is
+    the click, and it stops the cap turning back by itself. Turning a cap is easy, so the click
+    never has to be forced the way a pull-off catch does.
+  * Choose **Light, Medium or Firm** for the click. They aim for about 6, 12 and 20 N of push at the
+    rim: rough estimates for **PLA** from the cap's size and wall thickness. A printed fit is usually
+    a little tighter than drawn, which makes the click firmer, so start with Light. PETG and ABS flex
+    more and click more lightly.
   * There is one ridge, not one per nub. The cap shifts sideways by the fit clearance and its rim flexes
     into a slight oval to pass it. That keeps the click the same for any number of nubs. (A ridge under
     every nub locks the rim solid: an earlier version did this and could not be opened by hand.)
-  * On wide tubes and in spiral vase mode the cap is too flexible for a firm click, and the panel says
-    how firm it will be. Detailed mode has **Click flex** to set the ridge by hand.
-  * The notch is deepened automatically so the nub clears the ridge on both sides.
+  * A bigger ridge needs a longer slot, so Medium and Firm usually turn two columns instead of one.
+    On wide tubes and in spiral vase mode the cap is too flexible for a firm click, and the panel
+    says how firm it will be. Detailed mode has **Click flex** to set the ridge by hand.
+  * **Off** leaves out the lock row. The cap then just drops into a **home notch**, which lets it
+    close flush only at the home position.
 
 ## Text on the cap and base
 
