@@ -131,19 +131,17 @@ never touch the body.
   a pocket under solid wall.
   * Locked, the cap cannot be pulled off at all, however hard you pull. Turn it **anticlockwise**
     first; that is the puzzle's first move.
-  * One nub rides over a small ramped ridge on the way into the pocket and on the way out. That is
-    the click, and it stops the cap turning back by itself. Turning a cap is easy, so the click
-    never has to be forced the way a pull-off catch does.
-  * Choose **Light, Medium or Firm** for the click. They aim for about 6, 12 and 20 N of push at the
-    rim: rough estimates for **PLA** from the cap's size and wall thickness. A printed fit is usually
-    a little tighter than drawn, which makes the click firmer, so start with Light. PETG and ABS flex
-    more and click more lightly.
-  * There is one ridge, not one per nub. The cap shifts sideways by the fit clearance and its rim flexes
-    into a slight oval to pass it. That keeps the click the same for any number of nubs. (A ridge under
-    every nub locks the rim solid: an earlier version did this and could not be opened by hand.)
-  * A bigger ridge needs a longer slot, so Medium and Firm usually turn two columns instead of one.
-    On wide tubes and in spiral vase mode the cap is too flexible for a firm click, and the panel
-    says how firm it will be. Detailed mode has **Click flex** to set the ridge by hand.
+  * The landing is flat. Just before the nub comes to rest it passes one small **bump**: a thin
+    line up the groove floor with 45° sides. That is the click, and it stops the cap turning back
+    by itself.
+  * Choose **Light, Medium or Firm**: the bump stands 0.15, 0.25 or 0.40 mm higher than the nub's
+    clearance. A cap is stiff, so the bump is kept small, and a printed fit is usually a little
+    tighter than drawn, which makes it feel firmer. Start with Light. Detailed mode has
+    **Click bump** to set it by hand.
+  * There is one bump, not one per nub: a bump under every nub locks the rim solid.
+  * The cap is stopped by the floor of the lock row, not by its rim on the body's shoulder (the
+    shoulder sits 0.4 mm lower). However the two parts happen to seat, the nub has room to slide
+    under the wall into its pocket. Closed, a hairline gap shows between cap and base.
   * **Off** leaves out the lock row. The cap then just drops into a **home notch**, which lets it
     close flush only at the home position.
 

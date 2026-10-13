@@ -64,6 +64,26 @@ def check_design(p: TubeParams, label: str, walls=True):
         a = np.linalg.norm(np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]]), axis=1)
         assert a.min() > 1e-9, f"{label} {nm}: degenerate triangle"
 
+    # the body's mesh really is the designed surface: between every two grid lines the built
+    # wall lies on body_radius().  (The fit check below works on that function, so a mesh
+    # that strays from it - a slope stretched over a whole row, say - would go unnoticed.)
+    th, rr, zz = d.profiles["body"]
+    k1 = int(np.argmax(np.abs(zz - d.H_body) < 1e-9))
+    k0 = int(np.where(np.abs(zz[:k1] - (d.z_seat - d.w_v)) < 1e-9)[0][-1])
+    assert 0 < k0 < k1 and np.all(np.diff(zz[k0:k1 + 1]) > 0), f"{label}: maze columns not found"
+    for k in range(k0, k1):
+        if zz[k + 1] - zz[k] > 2.2 * geometry.EPS:           # not across a step
+            zm = np.full(len(th), 0.5 * (zz[k] + zz[k + 1]))
+            off = np.abs(d.body_radius(th, zm) - 0.5 * (rr[:, k] + rr[:, k + 1])).max()
+            assert off < 1e-6, f"{label}: mesh is {off:.3f} mm off the design at z = {zm[0]:.2f}"
+    gap_th = np.diff(np.append(th, th[0] + 2 * np.pi)) * d.r_maze
+    wide = gap_th > 2.2 * geometry.EPS
+    thm = (th + 0.5 * gap_th / d.r_maze)[wide]
+    for k in range(k0, k1 + 1):
+        mid = 0.5 * (rr[:, k] + np.roll(rr[:, k], -1))[wide]
+        off = np.abs(d.body_radius(thm, np.full(len(thm), zz[k])) - mid).max()
+        assert off < 0.08, f"{label}: mesh is {off:.3f} mm off the design round z = {zz[k]:.2f}"
+
     # the cap must travel along the whole solution without touching
     gap, snap = d.check_solution_fit()
     assert gap > 0.9 * min(d.c, EPS_OK), f"{label}: solution path collides (gap {gap:.3f})"
@@ -648,26 +668,31 @@ def check_map_window():
 
 
 def check_click():
-    """The twist lock: one extra row, a pocket under solid wall, turned into clockwise, one ridge."""
-    forces = {}
+    """The twist lock: one extra row, a flat pocket under solid wall, one small bump on the way in."""
+    from mazetube.geometry import CLICK_BUMP
     for nubs in (1, 2, 3, 4):
         d = check_design(TubeParams(nubs=nubs), f"twist lock, {nubs} nub(s)")
-        assert d.lock_cols >= 1 and d.detent_h > 0
+        assert d.lock_cols == 1 and d.detent_h > 0
         assert abs(d.notch - d.row_pitch) < 1e-9, "exactly one extra row below the maze"
-        # one ridge only: across nub 0's slot; the other nubs' slots have a plain floor
-        z = np.array([d.z_notch_floor + 0.5 * d.wp])
+        # one bump only: across nub 0's slot; the other nubs' slots have a plain floor
+        z = np.array([d.z_notch_floor + 0.3 * d.wp])
         for j in range(d.n):
             r = d.body_radius(np.array([d.th_ridge + j * 2 * np.pi / d.n]), z)[0]
             assert abs(r - (d.r_floor + (d.detent_h if j == 0 else 0.0))) < 1e-9, (nubs, j)
-        # ... and it lies between the nub's two resting places, clear of both
+        # ... a thin line with 45° sides, between the nub's two resting places and clear of both
+        assert abs(d.ridge_in - d.detent_h) < 1e-9 and abs(d.ridge_out - d.detent_h) < 1e-9
         nub0, half = d.nub_angles[0], 0.5 * d.nub_th
         lo, hi = d.th_ridge - d.a_lo, d.th_ridge + d.a_hi
         home0 = nub0 - LOCK_TURN * d.lock_cols * d.P_th
         assert min(nub0, home0) + half < lo < hi < max(nub0, home0) - half
-        # the cap shifts by the clearance, then flexes: ridge = tip clearance + shift + flex
-        assert abs(d.detent_h - (2 * d.c + d.detent)) < 1e-9
-        assert d.open_force == d.close_force, "the same push in as out"
-        forces[nubs] = d.open_force
+        assert (hi - lo) * d.r_floor < 1.0, "the bump is a thin line, the rest of the landing is flat"
+        # the landing is flat: under the resting nub the floor is the plain groove floor, over
+        # the whole height of the nub's flat tip (a stretched ceiling slope once made it a ramp)
+        zs = d.z0 + np.linspace(d.zn0, d.zn1 - d.dk, 9)
+        ths = nub0 + np.linspace(-half, half, 9)
+        assert np.abs(d.body_radius(ths[:, None], zs[None, :]) - d.r_floor).max() < 1e-9
+        # it stands just above the nub's tip clearance
+        assert abs(d.detent_h - (d.c + d.detent)) < 1e-9 and abs(d.detent - CLICK_BUMP[1]) < 1e-9
         # closing ends with a clockwise turn (seen from above the cap); opening starts anticlockwise
         frames = d.solution_keyframes(lift=0.0)
         assert LOCK_TURN == -1 and d.lock_way == "clockwise" and d.unlock_way == "anticlockwise"
@@ -675,46 +700,50 @@ def check_click():
         assert abs(frames[1][0] - d.lock_cols * d.P_th) < 1e-12 and frames[2][0] == frames[1][0]
         lo_c, hi_c = d.solution_columns()
         assert lo_c <= d.maze.home - d.lock_cols and hi_c >= d.maze.home, "the map shows the pocket"
-    # same click whatever the number of nubs
-    assert max(forces.values()) - min(forces.values()) < 0.5 and 4 < forces[3] < 9, forces
+        # the lock row's floor stops the cap, not its rim on the shoulder: pushed right down
+        # the nub still fits, and the body's shoulder is lower than the cap's rim ever gets
+        assert abs(d.z0 - d.z_seat - (d.c + 0.1)) < 1e-9 and d.z0 - d.z_seat > d.c
+        assert d.min_gap(0.0, -d.c + 0.02) > 0 and d.min_gap(frames[1][0], -d.c + 0.02) > 0
+        bv = d.body_mesh()[0]
+        band = bv[np.hypot(bv[:, 0], bv[:, 1]) > d.r_cap_in + 0.5]
+        assert abs(band[:, 2].max() - d.z_seat) < 1e-9, "the shoulder is where the design says"
 
     prev = 0.0
     for level in (1, 2, 3):
         d = TubeDesign(TubeParams(detent_level=level))
-        assert prev < d.open_force <= 25.0, (level, d.open_force)
-        assert d.detent_h <= d.d - 0.3 + 1e-9, "ridge stays inside the groove"
+        assert prev < d.detent <= 0.4 + 1e-9 and abs(d.detent - CLICK_BUMP[level]) < 1e-9
+        assert d.detent_h <= d.d - 0.3 + 1e-9, "the bump stays inside the groove"
         assert 1 <= d.lock_cols <= d.Ns - 1, "the slot ends before the next nub's home column"
         room = (d.lock_cols * d.P_th - d.nub_th) * d.r_floor
-        assert d.ridge_in + d.ridge_out <= room - 0.25 + 1e-9, "the ridge fits in its slot"
-        prev = d.open_force
-    assert TubeDesign(TubeParams(detent_level=2)).lock_cols == 2, "a bigger ridge gets a longer slot"
+        assert d.ridge_in + d.ridge_out <= room - 0.3 + 1e-9, "the bump fits in its slot"
+        prev = d.detent
+    # thin maze walls leave less room: a firm bump then gets a slot two columns long
+    assert TubeDesign(TubeParams(wall_width=0.9, detent_level=3)).lock_cols == 2
 
-    # Off: no lock row, just the home notch
+    # Off: no lock row, just the home notch, and the cap's rim sits on the shoulder
     d = check_design(TubeParams(detent_level=0), "click off: home notch")
-    assert d.detent_h == 0 and d.lock_cols == 0 and abs(d.notch - 1.5) < 1e-9
+    assert d.detent_h == 0 and d.lock_cols == 0 and abs(d.notch - 1.5) < 1e-9 and d.z_seat == d.z0
     assert d.solution_keyframes()[1] == (0.0, d.notch)
 
     # set by hand, and the limits
     d = TubeDesign(TubeParams(detent=0.3))
-    assert abs(d.detent - 0.3) < 1e-9
+    assert abs(d.detent - 0.3) < 1e-9 and abs(d.detent_h - 0.6) < 1e-9
     assert TubeDesign(TubeParams(detent=1.4)).errors
-    d = TubeDesign(TubeParams(groove_depth=1.0))             # too shallow for a ridge: lock, no click
+    d = TubeDesign(TubeParams(groove_depth=0.6, auto_size=False))    # no depth to spare for a bump
     assert d.detent_h == 0 and d.lock_cols == 1 and any("too shallow" in n for n in d.notes)
     assert not d.errors and "no click" in d.info()["Home click"]
-    d = TubeDesign(TubeParams(vase_mode=True, path_width=5.2))
-    assert any("as firm as this cap allows" in n for n in d.notes)
-    # two columns per nub: the slot can only be one column long, so a big ridge is made lower
-    d = check_design(TubeParams(columns=6, nubs=3, detent_level=3), "twist lock, 2 columns per nub")
-    assert d.Ns == 2 and d.lock_cols == 1 and 0 < d.open_force < 20
-    assert any("too short for the full click ridge" in n for n in d.notes)
-    assert TubeDesign(TubeParams(columns=6, nubs=3, detent=0.9)).errors
+    # two columns per nub and thin walls: the slot can only be one column long, so the bump is lower
+    kw = dict(columns=6, nubs=3, wall_width=0.8)
+    d = check_design(TubeParams(**kw, detent_level=3), "twist lock, 2 columns per nub")
+    assert d.Ns == 2 and d.lock_cols == 1 and 0.05 <= d.detent < 0.4
+    assert any("too short for the full click bump" in n for n in d.notes)
+    assert TubeDesign(TubeParams(**kw, detent=0.9)).errors
 
     # designs saved with the old per-nub interference come back at the gentle setting
     old = TubeParams.from_dict({"nubs": 3, "detent": 0.25, "auto_size": True})
     assert old.detent_level == 1 and old.detent == 0.0
     assert TubeParams.from_dict({"detent": 0.0}).detent_level == 0
-    print(f"twist lock: clockwise into a pocket, one ridge, about {forces[3]:.0f} N at the rim "
-          f"for 1-4 nubs  OK")
+    print("twist lock: clockwise into a flat pocket, one small bump, floor-stopped, 1-4 nubs  OK")
 
 
 def check_persistence():

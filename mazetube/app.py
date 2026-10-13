@@ -135,12 +135,13 @@ SPEC = [
          "A twist lock at the closed position. One extra row below the maze: push the cap\n"
          "down, then turn it clockwise (seen from its closed end) until it clicks into a\n"
          "pocket. Locked, it cannot be pulled off; turn it anticlockwise to release it.\n"
-         "Light, Medium and Firm set the click (one nub rides over a small ridge): roughly\n"
-         "6, 12 and 20 N at the rim, rough estimates for PLA. Start with Light.\n"
+         "The landing is flat. Just before it comes to rest, one nub passes a small bump: a\n"
+         "thin line with 45° sides. Light, Medium and Firm make it 0.15, 0.25 and 0.40 mm\n"
+         "higher than the nub's clearance. A tight print feels firmer, so start with Light.\n"
          "Off: no lock row, the cap just drops into the home notch."),
-        ("detent", "Click flex", "float", 0.0, 1.5, 0.05, " mm|Automatic",
-         "How far the cap rim has to flex to pass the click ridge. Automatic sizes it from\n"
-         "the setting above and the cap's stiffness. Set a value to tune it by hand."),
+        ("detent", "Click bump", "float", 0.0, 1.5, 0.05, " mm|Automatic",
+         "How far the click bump stands above the nub's clearance. Automatic takes it from\n"
+         "the setting above. Set a value to tune it by hand; a cap is stiff, so keep it small."),
     ]),
     ("Body (inner tube)", [
         ("maze_diameter", "Maze diameter", "float", 12.0, 250.0, 0.5, " mm",
@@ -881,8 +882,8 @@ class MainWindow(QMainWindow):
                 else:
                     html.append(f"<p class='e'>✘ Fit check failed (gap {fit_gap:.2f} mm).</p>")
                 if d.lock_cols:
-                    click = (f" One nub clicks over a {d.detent_h:.2f} mm ridge on the way."
-                             if d.detent_h > 0 else "")
+                    click = (f" Just before it comes to rest, one nub passes a small "
+                             f"{d.detent_h:.2f} mm bump." if d.detent_h > 0 else "")
                     html.append(f"<p class='ok'>✔ Twist lock: push the cap down, then turn it "
                                 f"{d.lock_way} (seen from its closed end) into its pocket.{click} "
                                 f"Locked, it cannot be pulled off: turn it {d.unlock_way} first.</p>")
