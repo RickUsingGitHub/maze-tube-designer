@@ -681,8 +681,11 @@ def check_click():
             assert abs(r - (d.r_floor + (d.detent_h if j == 0 else 0.0))) < 1e-9, (nubs, j)
         # ... a thin line with 45° sides, between the nub's two resting places and clear of both
         assert abs(d.ridge_in - d.detent_h) < 1e-9 and abs(d.ridge_out - d.detent_h) < 1e-9
-        nub0, half = d.nub_angles[0], 0.5 * d.nub_th
+        nub0, half = d.nub_angles[d.ridge_nub], 0.5 * d.nub_th
         lo, hi = d.th_ridge - d.a_lo, d.th_ridge + d.a_hi
+        # it is in the pocket nearest the front, where it is seen first
+        front = np.abs(np.mod(d.nub_angles - geometry.FRONT + np.pi, 2 * np.pi) - np.pi)
+        assert front[d.ridge_nub] == front.min() and front.min() <= np.pi / d.n + 1e-9
         home0 = nub0 - LOCK_TURN * d.lock_cols * d.P_th
         assert min(nub0, home0) + half < lo < hi < max(nub0, home0) - half
         assert (hi - lo) * d.r_floor < 1.0, "the bump is a thin line, the rest of the landing is flat"

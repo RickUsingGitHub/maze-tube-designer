@@ -33,6 +33,7 @@ from .viewer import Viewer3D, make_transform
 BODY_COLOR = (0.93, 0.56, 0.22)
 CAP_COLOR = (0.24, 0.58, 0.88)
 NUB_COLOR = (0.98, 0.30, 0.38)
+BUMP_COLOR = (1.0, 0.95, 0.45)      # the click bump, picked out on the body
 PART_COLORS = {"body": BODY_COLOR, "cap": CAP_COLOR, "extension": (0.20, 0.72, 0.70)}
 TEXT_COLOR = (0.96, 0.95, 0.90)     # second-colour lettering
 
@@ -823,6 +824,16 @@ class MainWindow(QMainWindow):
         nub_f = cf[on_nub[cf].any(axis=1) & in_band[cf].all(axis=1)]
         self.viewer.set_mesh("nubs", cv, nub_f, NUB_COLOR)
         self.viewer.configure("nubs", overlay=True)
+        if d.detent_h > 0:                           # pick out the click bump: it is small, and
+            bv, bf = dparts[0].verts, dparts[0].faces    # in one pocket only
+            off = np.mod(np.arctan2(bv[:, 1], bv[:, 0]) - d.th_ridge + np.pi, 2 * np.pi) - np.pi
+            on_bump = ((off > -d.a_lo - 1e-6) & (off < d.a_hi + 1e-6)
+                       & (bv[:, 2] > d.z_notch_floor - 0.01) & (bv[:, 2] < d.z_notch_floor + d.wp + 0.01)
+                       & (np.hypot(bv[:, 0], bv[:, 1]) > d.r_floor - 1e-3))
+            self.viewer.set_mesh("bump", bv, bf[on_bump[bf].all(axis=1)], BUMP_COLOR)
+            self.viewer.configure("bump", overlay=True)
+        else:
+            self.viewer.remove_mesh("bump")
         self.map.set_design(d)
         self.viewer.set_bed(d.p.bed_x, d.p.bed_y)
         self.apply_view_mode(fit=None)
@@ -882,8 +893,13 @@ class MainWindow(QMainWindow):
                 else:
                     html.append(f"<p class='e'>✘ Fit check failed (gap {fit_gap:.2f} mm).</p>")
                 if d.lock_cols:
-                    click = (f" Just before it comes to rest, one nub passes a small "
-                             f"{d.detent_h:.2f} mm bump." if d.detent_h > 0 else "")
+                    click = ""
+                    if d.detent_h > 0:
+                        click = (f" Just before it comes to rest, one nub passes a small "
+                                 f"{d.detent_h:.2f} mm bump, shown in yellow on the body.")
+                        if d.n > 1:
+                            click += (f" Only the front one of the {d.n} pockets has it: a bump "
+                                      f"under every nub would lock the cap solid.")
                     html.append(f"<p class='ok'>✔ Twist lock: push the cap down, then turn it "
                                 f"{d.lock_way} (seen from its closed end) into its pocket.{click} "
                                 f"Locked, it cannot be pulled off: turn it {d.unlock_way} first.</p>")
@@ -961,6 +977,8 @@ class MainWindow(QMainWindow):
             models[pt.name] = (m, vis)
         m, vis = models["extension" if d.three else "cap"]
         v.configure("nubs", model=m, visible=vis)
+        m, vis = models["body"]
+        v.configure("bump", model=m, visible=vis)
         lo, hi = v.scene_bounds()
         if fit is None:   # auto: refit only if the scene size changed noticeably
             if self._fitted_bounds is None:

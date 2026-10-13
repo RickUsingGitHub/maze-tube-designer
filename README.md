@@ -138,7 +138,9 @@ never touch the body.
     clearance. A cap is stiff, so the bump is kept small, and a printed fit is usually a little
     tighter than drawn, which makes it feel firmer. Start with Light. Detailed mode has
     **Click bump** to set it by hand.
-  * There is one bump, not one per nub: a bump under every nub locks the rim solid.
+  * There is one bump, not one per nub: a bump under every nub locks the rim solid. It is in the
+    pocket nearest the front (the side the text is centred on) and is picked out in yellow in the
+    3D view. The other pockets are plain.
   * The cap is stopped by the floor of the lock row, not by its rim on the body's shoulder (the
     shoulder sits 0.4 mm lower). However the two parts happen to seat, the nub has room to slide
     under the wall into its pocket. Closed, a hairline gap shows between cap and base.

@@ -35,6 +35,7 @@ EPS = 0.05          # width of the near-vertical step facets (mm)
 # the click: how far its bump stands above the nub's tip clearance (mm): light, medium, firm
 CLICK_BUMP = {1: 0.15, 2: 0.25, 3: 0.40}
 CLICK_NAME = {1: "light", 2: "medium", 3: "firm"}
+FRONT = math.radians(300.0)     # the side that faces the default camera: text is centred on it
 LOCK_TURN = -1      # the last move when closing, seen from above the cap's closed end:
                     # -1 = the cap turns clockwise to lock (anticlockwise opens), +1 the reverse
 INLAY_DEPTH = 0.8   # second-colour text goes at least this deep: two printed walls (mm)
@@ -557,9 +558,13 @@ class TubeDesign:
         self.nub_angles = np.array(
             [self.cell_theta(mz.home + LOCK_TURN * self.lock_cols + j * Ns) for j in range(self.n)])
         if self.detent_h > 0:
-            # the click: ONE ridge, across nub 0's slot, just on the home side of its pocket
+            # the click: ONE bump, just on the home side of one nub's pocket - the pocket
+            # nearest the front, so it is the one seen first on screen and on the print
+            away = np.abs(np.mod(self.nub_angles - FRONT + math.pi, TWO_PI) - math.pi)
+            self.ridge_nub = int(np.argmin(away))
             a_in, a_out = self.ridge_in / self.r_floor, self.ridge_out / self.r_floor
-            foot = self.nub_angles[0] - LOCK_TURN * (0.5 * self.nub_th + self.gap_pocket / self.r_floor)
+            foot = (self.nub_angles[self.ridge_nub]
+                    - LOCK_TURN * (0.5 * self.nub_th + self.gap_pocket / self.r_floor))
             self.th_ridge = foot - LOCK_TURN * a_out        # its peak
             # how far it reaches clockwise / anticlockwise of the peak
             self.a_lo, self.a_hi = (a_out, a_in) if LOCK_TURN < 0 else (a_in, a_out)
@@ -665,7 +670,7 @@ class TubeDesign:
             style = 0
             self.notes.append("Second-colour text needs normal printing - in spiral vase mode "
                               "it is raised instead.")
-        centre = math.radians(300.0)           # level text faces the default camera
+        centre = FRONT                         # level text faces the default camera
         start = math.radians(250.0)            # a spiral starts just left of that
         for key in list(self._layouts):
             lo, hi, wall = regions[key]
@@ -1338,8 +1343,9 @@ class TubeDesign:
                 f"(seen from its closed end); {self.unlock_way} unlocks")
         if self.detent_h > 0:
             how = "set by hand" if self.p.detent >= 0.05 else CLICK_NAME.get(int(self.p.detent_level), "on")
-            text += (f". Click {how}: a {self.detent_h:.2f} mm bump, {self.detent:.2f} mm more "
-                     f"than the nub's clearance")
+            where = "in its pocket" if self.n == 1 else f"in one of the {self.n} pockets (the front one)"
+            text += (f". Click {how}: a {self.detent_h:.2f} mm bump {where}, {self.detent:.2f} mm "
+                     f"more than the nub's clearance")
         else:
             text += ", no click"
         return text
