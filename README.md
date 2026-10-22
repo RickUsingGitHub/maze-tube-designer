@@ -134,10 +134,9 @@ never touch the body.
   * The landing is flat. Just before the nub comes to rest it passes one small **bump**: a thin
     line up the groove floor with 45° sides. That is the click, and it stops the cap turning back
     by itself.
-  * Choose **Light, Medium or Firm**: the bump stands 0.15, 0.25 or 0.40 mm higher than the nub's
-    clearance. A cap is stiff, so the bump is kept small, and a printed fit is usually a little
-    tighter than drawn, which makes it feel firmer. Start with Light. Detailed mode has
-    **Click bump** to set it by hand.
+  * Choose **Light, Medium or Firm**: the bump stands 0.40, 0.55 or 0.70 mm higher than the nub's
+    clearance, which makes it 0.7, 0.85 or 1.0 mm high at the usual 0.3 mm clearance. Light was set
+    from a test print, so start there. Detailed mode has **Click bump** to set it by hand.
   * There is one bump, not one per nub: a bump under every nub locks the rim solid. It is in the
     pocket nearest the front (the side the text is centred on) and is picked out in yellow in the
     3D view. The other pockets are plain.

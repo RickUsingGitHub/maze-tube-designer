@@ -137,8 +137,9 @@ SPEC = [
          "down, then turn it clockwise (seen from its closed end) until it clicks into a\n"
          "pocket. Locked, it cannot be pulled off; turn it anticlockwise to release it.\n"
          "The landing is flat. Just before it comes to rest, one nub passes a small bump: a\n"
-         "thin line with 45° sides. Light, Medium and Firm make it 0.15, 0.25 and 0.40 mm\n"
-         "higher than the nub's clearance. A tight print feels firmer, so start with Light.\n"
+         "thin line with 45° sides. Light, Medium and Firm make it 0.40, 0.55 and 0.70 mm\n"
+         "higher than the nub's clearance (0.7, 0.85 and 1.0 mm high at 0.3 mm clearance).\n"
+         "Light is a good start: it was set from a test print.\n"
          "Off: no lock row, the cap just drops into the home notch."),
         ("detent", "Click bump", "float", 0.0, 1.5, 0.05, " mm|Automatic",
          "How far the click bump stands above the nub's clearance. Automatic takes it from\n"

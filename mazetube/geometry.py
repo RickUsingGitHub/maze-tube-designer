@@ -32,8 +32,9 @@ from .params import TubeParams
 from .textmask import layout_text
 
 EPS = 0.05          # width of the near-vertical step facets (mm)
-# the click: how far its bump stands above the nub's tip clearance (mm): light, medium, firm
-CLICK_BUMP = {1: 0.15, 2: 0.25, 3: 0.40}
+# the click: how far its bump stands above the nub's tip clearance (mm): light, medium, firm.
+# Set from a test print: 0.15 did nothing, 0.40 was a good light click.
+CLICK_BUMP = {1: 0.40, 2: 0.55, 3: 0.70}
 CLICK_NAME = {1: "light", 2: "medium", 3: "firm"}
 FRONT = math.radians(300.0)     # the side that faces the default camera: text is centred on it
 LOCK_TURN = -1      # the last move when closing, seen from above the cap's closed end:
@@ -395,11 +396,10 @@ class TubeDesign:
         first.
 
         The landing is flat.  Just before the nub comes to rest it passes one
-        small bump: a thin line up the floor with 45° sides, standing only a
-        little higher than the nub's tip clearance.  It is in ONE nub's slot
-        only (a bump under every nub would lock the rim solid).  A cap is too
-        stiff for a tall bump - the first versions of this click could not be
-        passed at all - so it is kept small and sized by height, not by force.
+        small bump: a thin line up the floor with 45° sides, standing a little
+        higher than the nub's tip clearance.  It is in ONE nub's slot only (a
+        bump under every nub would lock the rim solid).  It is sized by height,
+        not by force: the heights come from test prints (CLICK_BUMP).
         """
         p = self.p
         level = int(p.detent_level)
@@ -413,7 +413,7 @@ class TubeDesign:
 
         most = self.d - 0.3 - self.c                        # the bump stays well inside the groove
         by_hand = p.detent >= 0.05
-        bite = p.detent if by_hand else CLICK_BUMP.get(level, 0.15)
+        bite = p.detent if by_hand else CLICK_BUMP.get(level, CLICK_BUMP[1])
         if by_hand and bite > most + 1e-9:
             self.errors.append(f"The click bump is too big for this groove depth - at most "
                                f"{max(most, 0.0):.2f} mm here.")

@@ -688,7 +688,7 @@ def check_click():
         assert front[d.ridge_nub] == front.min() and front.min() <= np.pi / d.n + 1e-9
         home0 = nub0 - LOCK_TURN * d.lock_cols * d.P_th
         assert min(nub0, home0) + half < lo < hi < max(nub0, home0) - half
-        assert (hi - lo) * d.r_floor < 1.0, "the bump is a thin line, the rest of the landing is flat"
+        assert (hi - lo) * d.r_floor < 2.1, "the bump is a thin line, the rest of the landing is flat"
         # the landing is flat: under the resting nub the floor is the plain groove floor, over
         # the whole height of the nub's flat tip (a stretched ceiling slope once made it a ramp)
         zs = d.z0 + np.linspace(d.zn0, d.zn1 - d.dk, 9)
@@ -714,7 +714,7 @@ def check_click():
     prev = 0.0
     for level in (1, 2, 3):
         d = TubeDesign(TubeParams(detent_level=level))
-        assert prev < d.detent <= 0.4 + 1e-9 and abs(d.detent - CLICK_BUMP[level]) < 1e-9
+        assert prev < d.detent <= CLICK_BUMP[3] + 1e-9 and abs(d.detent - CLICK_BUMP[level]) < 1e-9
         assert d.detent_h <= d.d - 0.3 + 1e-9, "the bump stays inside the groove"
         assert 1 <= d.lock_cols <= d.Ns - 1, "the slot ends before the next nub's home column"
         room = (d.lock_cols * d.P_th - d.nub_th) * d.r_floor
@@ -738,7 +738,7 @@ def check_click():
     # two columns per nub and thin walls: the slot can only be one column long, so the bump is lower
     kw = dict(columns=6, nubs=3, wall_width=0.8)
     d = check_design(TubeParams(**kw, detent_level=3), "twist lock, 2 columns per nub")
-    assert d.Ns == 2 and d.lock_cols == 1 and 0.05 <= d.detent < 0.4
+    assert d.Ns == 2 and d.lock_cols == 1 and 0.05 <= d.detent < CLICK_BUMP[3]
     assert any("too short for the full click bump" in n for n in d.notes)
     assert TubeDesign(TubeParams(**kw, detent=0.9)).errors
 
