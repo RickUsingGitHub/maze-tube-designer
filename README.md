@@ -63,6 +63,8 @@ watertight STL files that are already oriented for printing.
 * **Build the Windows app yourself:** `build_exe.bat` (uses PyInstaller; the result is
   `dist\MazeTubeDesigner.exe`).
 
+Maze Tube Designer is free. If a puzzle box of yours landed well, you can [buy me a coffee](https://ko-fi.com/rickapps).
+
 ## Using it
 
 The app starts in **Simple** mode. Say what goes inside and what your printer can do, and the tube is
