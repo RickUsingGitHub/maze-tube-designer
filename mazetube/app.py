@@ -9,8 +9,8 @@ import sys
 import time
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import (QAction, QColor, QIcon, QImage, QKeySequence, QPainter, QPalette,
+from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import (QAction, QColor, QDesktopServices, QIcon, QImage, QKeySequence, QPainter, QPalette,
                            QSurfaceFormat)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                                QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
@@ -36,6 +36,7 @@ NUB_COLOR = (0.98, 0.30, 0.38)
 BUMP_COLOR = (1.0, 0.95, 0.45)      # the click bump, picked out on the body
 PART_COLORS = {"body": BODY_COLOR, "cap": CAP_COLOR, "extension": (0.20, 0.72, 0.70)}
 TEXT_COLOR = (0.96, 0.95, 0.90)     # second-colour lettering
+KOFI_URL = "https://ko-fi.com/rickapps"
 
 VIEW_MODES = ["Print layout", "Assembled", "Exploded", "Body only", "Cap only"]
 SPEEDS = {"0.5×": 0.5, "1×": 1.0, "2×": 2.0, "4×": 4.0}
@@ -250,6 +251,13 @@ def glyph_icon(kind: str) -> QIcon:
         p.setPen(pen)
         p.drawPolyline([QPointF(18, 52), QPointF(18, 32), QPointF(34, 32),
                         QPointF(34, 22), QPointF(46, 22), QPointF(46, 12)])
+    elif kind == "coffee":
+        p.drawRoundedRect(QRectF(14, 26, 30, 26), 5, 5)              # cup
+        p.drawArc(QRectF(36, 30, 16, 16), -90 * 16, 180 * 16)        # handle, ends on the cup
+        pen.setColor(QColor(240, 163, 86))
+        p.setPen(pen)
+        for x in (21, 29, 37):                                       # steam
+            p.drawLine(QPointF(x, 10), QPointF(x, 20))
     p.end()
     return QIcon(pm)
 
@@ -734,6 +742,13 @@ class MainWindow(QMainWindow):
             vm.addAction(a)
         hm = mb.addMenu("&Help")
         hm.addAction(self.a_about)
+
+        # A coffee cup after Help, for anyone who would like to chip in.
+        self.a_kofi = QAction(glyph_icon("coffee"), "", self)
+        self.a_kofi.setToolTip("Maze Tube Designer is free — buy me a coffee")
+        self.a_kofi.setStatusTip("Maze Tube Designer is free — buy me a coffee")
+        self.a_kofi.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(KOFI_URL)))
+        mb.addAction(self.a_kofi)
         for a in (self.a_random, self.a_play):
             self.addAction(a)
 
