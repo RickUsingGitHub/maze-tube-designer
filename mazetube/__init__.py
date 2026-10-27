@@ -1,3 +1,3 @@
 """Maze Tube Designer - generate printable cylinder maze puzzle boxes."""
 
-__version__ = "1.4.3"
+__version__ = "1.4.4"
