@@ -1305,7 +1305,9 @@ class MainWindow(QMainWindow):
             "before it comes off.</p>"
             "<p><b>3D view:</b> left-drag rotate · right-drag / shift-drag pan · wheel zoom · "
             "double-click or F to fit.</p>"
-            "<p>Exported STLs are in millimetres, already oriented for printing.</p>")
+            "<p>Exported STLs are in millimetres, already oriented for printing.</p>"
+            "<p>Maze Tube Designer is free. If a puzzle box of yours landed well, you can "
+            "<a href='https://ko-fi.com/rickapps'>buy me a coffee</a>.</p>")
 
     def closeEvent(self, ev):
         if not self._confirm_discard():
