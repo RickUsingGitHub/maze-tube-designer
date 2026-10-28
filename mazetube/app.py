@@ -26,6 +26,7 @@ from .maze import ALGORITHM_TIPS, ALGORITHMS
 from .mazeview import MazeMapWidget
 from .params import TubeParams, load_design, save_design
 from .presets import PRESETS, slug
+from .spinbox import DoubleSpinBox, SpinBox
 from .stl import write_stl
 from .threemf import write_3mf
 from .viewer import Viewer3D, make_transform
@@ -458,7 +459,7 @@ class MainWindow(QMainWindow):
     def _make_widget(self, key, kind, lo, hi, step, extra):
         val = getattr(self.params, key)
         if kind == "int":
-            w = QSpinBox()
+            w = SpinBox()
             w.setRange(lo, hi)
             w.setSingleStep(step)
             if extra == "Auto":
@@ -466,7 +467,7 @@ class MainWindow(QMainWindow):
             w.setValue(val)
             w.valueChanged.connect(lambda v, k=key: self._on_param(k, int(v)))
         elif kind == "float":
-            w = QDoubleSpinBox()
+            w = DoubleSpinBox()
             w.setDecimals(2)
             w.setRange(lo, hi)
             w.setSingleStep(step)
@@ -508,7 +509,7 @@ class MainWindow(QMainWindow):
             box = QWidget()
             hl = QHBoxLayout(box)
             hl.setContentsMargins(0, 0, 0, 0)
-            sp = QSpinBox()
+            sp = SpinBox()
             sp.setRange(lo, hi)
             sp.setValue(val)
             sp.setKeyboardTracking(False)
