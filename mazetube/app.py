@@ -806,12 +806,16 @@ class MainWindow(QMainWindow):
         try:
             d = TubeDesign(self.params, self.maze, self.maze_key)
             if d.errors:
+                # Forget the last good design, so the export buttons can't save a tube that no
+                # longer matches the settings on screen (they say the parameters aren't valid).
+                self.design = None
                 self._show_info(None, d.errors, d.warnings)
                 self.statusBar().showMessage("Invalid parameters - see the panel on the right")
                 return
             dparts = d.display_parts()                # vase mode: shown as printed shells
             fit_gap, snap = d.check_solution_fit(step=0.5)
         except Exception as exc:   # pragma: no cover - safety net for the GUI
+            self.design = None
             self._show_info(None, [f"Internal error: {exc}"], [])
             return
         finally:
